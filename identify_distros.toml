@@ -1,9 +1,10 @@
-# distros.toml
+# identify_distros.toml
 
 [base_distros]
+# Strict internal volume ID matches
 arch = "Arch Linux"
-ubuntu = "Ubuntu"
 fedora = "Fedora"
+ubuntu = "Ubuntu"
 debian = "Debian"
 
 [fork_overrides]
@@ -17,11 +18,17 @@ debian = "Debian"
 "debian.parrot" = "Parrot Security"
 
 [standalone_matches]
-nixos = "NixOS"
+# Text matching targets for standalone distros, flavors, and tools
 gparted = "GParted Live"
 hbcd = "Hiren's BootCD"
 hiren = "Hiren's BootCD"
+kodachi = "Linux Kodachi"
+nixos = "NixOS"
+parrot = "Parrot Security"
 systemrescue = "SystemRescue"
 rescuezilla = "Rescuezilla"
-kodachi = "Linux Kodachi"
-tiny11 = "Tiny11 (Windows)"
+tiny11 = "Tiny11"
+
+# Specific desktop flavor/version overrides so regex doesn't grab them poorly
+fedora-kde = "Fedora KDE"
+ubuntu-server = "Ubuntu Server"
