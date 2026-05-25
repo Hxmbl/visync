@@ -5,3 +5,41 @@ download_dir = ""
 
 [checksums]
 enabled = true
+
+
+
+###################################
+####### DISTRO RECOGNITION ########
+###################################
+[base_distros]
+# Strict internal volume ID matches
+arch = "Arch Linux"
+fedora = "Fedora"
+ubuntu = "Ubuntu"
+debian = "Debian"
+
+[fork_overrides]
+# Key format: "parent_distro.keyword_in_filename" = "Clean Name"
+"arch.omarchy" = "Omarchy"
+"arch.manjaro" = "Manjaro"
+"ubuntu.pop-os" = "Pop!_OS"
+"ubuntu.pop_os" = "Pop!_OS"
+"ubuntu.mint" = "Linux Mint"
+"debian.kali" = "Kali Linux"
+"debian.parrot" = "Parrot Security"
+
+[standalone_matches]
+# Text matching targets for standalone distros, flavors, and tools
+gparted = "GParted Live"
+hbcd = "Hiren's BootCD"
+hiren = "Hiren's BootCD"
+kodachi = "Linux Kodachi"
+nixos = "NixOS"
+parrot = "Parrot Security"
+systemrescue = "SystemRescue"
+rescuezilla = "Rescuezilla"
+tiny11 = "Tiny11"
+
+# Specific desktop flavor/version overrides so regex doesn't grab them poorly
+fedora-kde = "Fedora KDE"
+ubuntu-server = "Ubuntu Server"

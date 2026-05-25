@@ -12,4 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-visync = "visync.main:app"
+visync = "src.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

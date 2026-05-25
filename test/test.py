@@ -1,3 +1,6 @@
+print("TESTING FINDER.PY FUNCTIONS")
+print("initializing...")
+
 import os
 import sys
 
@@ -6,6 +9,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 # Now Python can see the src directory
 from src.finder import *
+
+print("Done")
+print("Finding Ventoy drives...")
 
 drives = find_ventoy_drives()
 
@@ -32,7 +38,7 @@ else:
 
         print("\n")
 
-        print("Trying the formatted version:")
+        print("Trying the formatted version:" + "=" * 20)
 
         formatted_files = find_installed_isos_formatted(drive)
         if formatted_files:
@@ -41,5 +47,15 @@ else:
                 print(f" - {f}")
         else:
             print(f"No ISOs found on {drive}. (Formatted version)")
+
+        print("\n")
+
+        print("Trying volume IDs:" + "=" * 20)
+        for iso in files:
+            raw_ids = get_iso_volume_id(iso)
+            if raw_ids:
+                print(f" - {raw_ids}")
+            else:
+                print(f" - {iso.name}: (no volume ID)")
 
         print("=" * 60 + "\n")

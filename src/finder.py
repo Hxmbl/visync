@@ -1,5 +1,18 @@
 """Discover Ventoy drives and locate ISO files."""
 
+from pathlib import Path
+
+
+def _distro_config_path() -> Path:
+    """Resolve config.toml from cwd (runtime) or repo root (development)."""
+    cwd_config = Path.cwd() / "config.toml"
+    if cwd_config.is_file():
+        return cwd_config
+    repo_config = Path(__file__).resolve().parent.parent / "config.toml"
+    if repo_config.is_file():
+        return repo_config
+    return cwd_config
+
 
 def find_ventoy_drives() -> list[Path]:
     """
@@ -10,7 +23,6 @@ def find_ventoy_drives() -> list[Path]:
     """
     import platform
     import subprocess
-    from pathlib import Path
 
     system = platform.system()
     detected_paths = []
@@ -120,19 +132,17 @@ def get_iso_volume_id(iso_path: Path) -> str:
 def identify_distro(volume_id: str, file_name: str) -> str:
     """
     Match the OS distribution using a cascading hybrid approach:
-    1. Strict internal Volume ID matches from distros.toml
+    1. Strict internal Volume ID matches from config.toml
     2. Contextual filename overrides for forks sharing a base ID
     3. Smart filename regex parsing fallback
     """
     import re
     import tomllib
-    from pathlib import Path
 
     vol_lower = volume_id.lower().strip()
     file_lower = file_name.lower().strip()
 
-    # Load configuration file dynamically
-    config_path = Path(__file__).parent / "identify_distros.toml"
+    config_path = _distro_config_path()
     try:
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
@@ -158,7 +168,10 @@ def identify_distro(volume_id: str, file_name: str) -> str:
         if keyword in vol_lower or keyword in file_lower:
             return clean_name
 
-    # Layer 4: Final Generic Fallback - Regex Name Parsing
+    # Layer 4: Final generic fallback — regex filename parsing (ISO files only)
+    if not file_lower.endswith(".iso"):
+        return "Unknown OS"
+
     name_match = re.match(r"^([a-zA-Z_\-]+?)(?:[-_]v?\d|\.)", file_name)
     if name_match:
         extracted_name = (
