@@ -5,6 +5,7 @@ def find_ventoy_drives() -> list[Path]:
     """
     Detect mounted Ventoy drives across different operating systems.
     Returns a list of Path objects pointing to the root of each detected Ventoy drive.
+    To get drive path just index 0 of the returned list.
     Will be used for multi-drive support later.
     """
     import platform
@@ -75,6 +76,8 @@ def find_ventoy_drives() -> list[Path]:
         if not result.stdout.strip():
             return []
 
+        # Explicitly clear/initialize variable state prior to evaluation
+        detected_paths = []
         try:
             drives_data = json.loads(result.stdout)
             # Ensure data is handled as a list even if only one drive is returned
@@ -96,17 +99,89 @@ def find_ventoy_drives() -> list[Path]:
     # Error handling for when multiple Ventoy targets are found
     if len(detected_paths) > 1:
         raise RuntimeError(
-            f"Multiple Ventoy drives detected: {[str(p) for p in detected_paths]}. Please connect only one."
+            f"Multiple Ventoy drives detected, this is not supported *yet*: {[str(p) for p in detected_paths]}. Please connect only one."
         )
 
     return detected_paths
 
 
-def find_isos(directory: Path) -> list[Path]:
+def get_iso_volume_id(iso_path: Path) -> str:
+    """Read the unchangeable internal Volume Identifier of an ISO file."""
+    try:
+        with open(iso_path, "rb") as f:
+            # Skip directly to the ISO 9660 primary descriptor header
+            f.seek(32808)
+            volume_id = f.read(32)
+            return volume_id.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
+
+
+def identify_distro(volume_id: str, file_name: str) -> str:
+    """
+    Match the OS distribution using a cascading hybrid approach:
+    1. Strict internal Volume ID matches from distros.toml
+    2. Contextual filename overrides for forks sharing a base ID
+    3. Smart filename regex parsing fallback
+    """
+    import re
+    import tomllib
+    from pathlib import Path
+
+    vol_lower = volume_id.lower().strip()
+    file_lower = file_name.lower().strip()
+
+    # Load configuration file dynamically
+    config_path = Path(__file__).parent / "identify_distros.toml"
+    try:
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+    except Exception:
+        config = {}
+
+    # Layer 1 & 2: Match Base Distros and check for Contextual Fork Overrides
+    base_distros = config.get("base_distros", {})
+    fork_overrides = config.get("fork_overrides", {})
+
+    for base_key, base_name in base_distros.items():
+        if base_key in vol_lower:
+            # Look for specific structural overrides belonging to this base
+            for override_key, clean_name in fork_overrides.items():
+                parent, _, keyword = override_key.partition(".")
+                if parent == base_key and keyword in file_lower:
+                    return clean_name
+            return base_name
+
+    # Layer 3: Standalone match rules (text matching on volume ID or filename)
+    standalone_matches = config.get("standalone_matches", {})
+    for keyword, clean_name in standalone_matches.items():
+        if keyword in vol_lower or keyword in file_lower:
+            return clean_name
+
+    # Layer 4: Final Generic Fallback - Regex Name Parsing
+    name_match = re.match(r"^([a-zA-Z_\-]+?)(?:[-_]v?\d|\.)", file_name)
+    if name_match:
+        extracted_name = (
+            name_match.group(1).replace("-", " ").replace("_", " ").title().strip()
+        )
+        return extracted_name
+
+    return "Unknown OS"
+
+
+def find_installed_isos(directory: Path) -> list[Path]:
     """Find all ISO files under the given directory."""
-    ...
+    return list(directory.rglob("*.iso"))
 
 
-def get_installed_isos(ventoy_mount: Path) -> list[Path]:
-    """List ISO files already present on the Ventoy drive."""
-    ...
+def find_installed_isos_formatted(directory: Path) -> list[str]:
+    """Find all ISOs and return their verified distribution names."""
+    detected_names = []
+
+    for iso_path in find_installed_isos(directory):
+        # Read the internal header label instead of trusting the filename
+        volume_id = get_iso_volume_id(iso_path)
+        distro = identify_distro(volume_id, iso_path.name)
+        detected_names.append(distro)
+
+    return detected_names

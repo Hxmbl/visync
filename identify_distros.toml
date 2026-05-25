@@ -1,0 +1,27 @@
+# distros.toml
+
+[base_distros]
+arch = "Arch Linux"
+ubuntu = "Ubuntu"
+fedora = "Fedora"
+debian = "Debian"
+
+[fork_overrides]
+# Key format: "parent_distro.keyword_in_filename" = "Clean Name"
+"arch.omarchy" = "Omarchy"
+"arch.manjaro" = "Manjaro"
+"ubuntu.pop-os" = "Pop!_OS"
+"ubuntu.pop_os" = "Pop!_OS"
+"ubuntu.mint" = "Linux Mint"
+"debian.kali" = "Kali Linux"
+"debian.parrot" = "Parrot Security"
+
+[standalone_matches]
+nixos = "NixOS"
+gparted = "GParted Live"
+hbcd = "Hiren's BootCD"
+hiren = "Hiren's BootCD"
+systemrescue = "SystemRescue"
+rescuezilla = "Rescuezilla"
+kodachi = "Linux Kodachi"
+tiny11 = "Tiny11 (Windows)"
