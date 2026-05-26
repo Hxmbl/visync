@@ -1,3 +1,4 @@
+#!/visync/config.toml
 [iso]
 source_dir = ""
 download_dir = ""
@@ -43,3 +44,50 @@ tiny11 = "Tiny11"
 # Specific desktop flavor/version overrides so regex doesn't grab them poorly
 fedora-kde = "Fedora KDE"
 ubuntu-server = "Ubuntu Server"
+
+###################################
+######## DYNAMIC SCRAPERS #########
+###################################
+#
+[distros.Fedora]
+clean_name = "Fedora"
+keyword = "fedora"
+strategy = "fedora_nested"
+base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
+version_regex = 'href="([0-9\.]+)/"'
+iso_regex = 'href="(Fedora-Workstation-Live-x86_64-[0-9\.-]+\.iso)"'
+
+[distros.ArchLinux]
+clean_name = "Arch Linux"
+keyword = "archlinux"
+strategy = "direct_match"
+base_url = "https://geo.mirror.pkgbuild.com/iso/latest/"
+iso_regex = 'href="(archlinux-[0-9\.]+-x86_64\.iso)"'
+
+[distros.UbuntuServer]
+clean_name = "Ubuntu Server"
+keyword = "live-server"
+strategy = "ubuntu_nested"
+base_url = "https://releases.ubuntu.com/"
+version_regex = 'href="([0-9\.]+)/"'
+iso_regex = 'href="(ubuntu-[0-9\.-]+live-server-amd64\.iso)"'
+
+################
+##### ARM ######
+################
+
+[distros.FedoraARM]
+clean_name = "Fedora ARM"
+keyword = "fedora-arm"
+strategy = "fedora_nested"
+base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
+version_regex = 'href="([0-9\.]+)/"'
+# Fedora lists aarch64 images under its standard variant subtrees
+iso_regex = 'href="(Fedora-Workstation-Live-aarch64-[0-9\.-]+\.iso)"'
+
+[distros.ArchLinuxARM]
+clean_name = "Arch Linux ARM"
+keyword = "archlinuxarm"
+strategy = "direct_match"
+base_url = "https://os.archlinuxarm.org/os/"
+iso_regex = 'href="(ArchLinuxARM-rpi-aarch64-latest\.tar\.gz)"' # Note: ARM targets use rootfs archives or img files
