@@ -1,6 +1,5 @@
 """
 Discover Ventoy drives and locate ISO files.
-!/src/finder.py
 
 What it does:
 - Detects Ventoy volumes on Windows, macOS and Linux
