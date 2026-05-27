@@ -1,8 +1,10 @@
 """Scrape and synchronize any distribution dynamically configured inside config.toml."""
 
 import re
+import shutil
 import sys
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -19,15 +21,50 @@ def load_config() -> dict:
             return tomllib.load(f)
     except Exception as e:
         print(f"[-] Critical Error: Failed to parse config.toml database: {e}")
+        # TODO: Add a later fallback mechanism to load a default embedded config if the file is missing or malformed
         return {}
 
 
-def fetch_html(url: str) -> str:
-    """Download plain text source HTML from an external mirror index."""
+def fetch_html(url: str, allow_insecure: bool = False) -> str:
+    """Download plain text source HTML from an external mirror index. (Web scraping. API in the future?)"""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return response.read().decode("utf-8", errors="ignore")
+        ctx = None
+        if allow_insecure:
+            import ssl
+
+            ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+            html = response.read().decode("utf-8", errors="ignore")
+            # Detect bot-protected pages (e.g. Anubis proof-of-work)
+            if "Anubis" in html[:1000]:
+                print("""
+[-] Mirror protected by bot challenge (Anubis). Cannot scrape automatically."
+Visit the URL in a browser, complete the challenge, then re-run."
+(NOTE: The challenge cannot be forwarded to a browser because"
+Anubis binds the challenge to this specific HTTP session.)")
+                """)
+                return ""
+            return html
+    except urllib.error.URLError as e:
+        err_str = str(e).lower()
+        if "ssl" in err_str or "certificate" in err_str or "cert" in err_str:
+            print(
+                f"[-] SSL certificate verification failed for {url}\n    Details: {e}"
+            )
+            try:
+                answer = input(
+                    "[?] SSL verification failed. Retry with an insecure connection? (y/N): "
+                )
+            except EOFError:
+                print("\n[-] No input detected. Defaulting to 'No' to ensure security.")
+                answer = "n"
+            if answer.lower() == "y":
+                return fetch_html(url, allow_insecure=True)
+            print("    Skipping this mirror.")
+            return ""
+        print(f"[-] Network link failure targeting mirror node {url}: {e}")
+        return ""
     except Exception as e:
         print(f"[-] Network link failure targeting mirror node {url}: {e}")
         return ""
@@ -90,22 +127,72 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if match:
             return match.group(1), f"{iso_dir_url}{match.group(1)}"
 
+    # A later implementation could add a more generic "custom_parser" strategy that loads a user-defined Python module with custom parsing logic for more complex sites. Currently you have to choose from built-in strategies or add new ones manually in the code. Not really good.
+
     return "", ""
 
 
 def download_iso(url: str, dest_path: Path):
     """Download streaming asset payloads showing direct feedback text trackers."""
     print(f"[*] Extracting resource stream -> {dest_path.name}")
+    print(
+        "    Note: Progress shows 0% during connection setup. "
+        "This is normal, wait a bit."
+    )
+
+    # Verify sufficient disk space (need 105% of expected size)
     try:
+        usage = shutil.disk_usage(dest_path.parent)
+        available = usage.free
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            expected = int(resp.headers.get("Content-Length", 0))
+        if expected > 0:
+            needed = int(expected * 1.05)
+            print(
+                f"    Expected size: {expected / (1024**3):.2f} GiB "
+                f"| Available: {available / (1024**3):.2f} GiB"
+            )
+            if available < needed:
+                print(
+                    f"[-] Insufficient disk space. "
+                    f"Need {needed / (1024**3):.2f} GiB, "
+                    f"have {available / (1024**3):.2f} GiB."
+                    "\nWe check for 105% of the expected size so we don't corrupt your drive.\nClean up some space and try again."
+                )
+                return
+        else:
+            print(
+                f"    Available disk space: {available / (1024**3):.2f} GiB "
+                f"(unknown download size, skipping space check)"  # <--- THIS IS RISKY.
+            )
+    except Exception:
+        pass
 
-        def callback(blocks, block_size, total_size):
-            if total_size > 0:
-                percent = (blocks * block_size / total_size) * 100
-                sys.stdout.write(f"\r    -> Progress Counter: {percent:.1f}%")
-                sys.stdout.flush()
+    CHUNK_SIZE = 8192  # 8 KiB read buffer
 
-        urllib.request.urlretrieve(url, str(dest_path), reporthook=callback)
-        print(f"\n[✓] Asset file write sequence complete.")
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            downloaded = 0
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = resp.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        percent = (downloaded / total) * 100
+                        sys.stdout.write(
+                            f"\r    -> {downloaded / (1024**2):.0f} / "
+                            f"{total / (1024**2):.0f} MiB ({percent:.1f}%)"
+                        )
+                        sys.stdout.flush()
+        print(
+            "\n[✓] Asset file write sequence complete."
+        )  # <--- No need for this to have been an f-string since there are no variables.
     except Exception as e:
         print(f"\n[-] Resource save exception tracking download: {e}")
 
@@ -128,7 +215,7 @@ def sync_all_configured_distros():
     # Track target paths
     drives = find_ventoy_drives()
     if not drives:
-        print("[-] Target failure: No valid active Ventoy partition structures found.")
+        print("[-] ERROR: No Ventoy drives found.")
         return
     ventoy_root = drives[0]
 
@@ -164,22 +251,6 @@ def sync_all_configured_distros():
         if any(f.name == latest_filename for f in local_ventoy_files):
             print(f"[✓] {clean_name} is fully initialized and matches upstream build.")
             continue
-
-        # Look for outdated occurrences targeting the specific lower keyword tag
-        target_keyword = settings.get("keyword", "").lower()
-        if target_keyword:
-            for local_file in local_ventoy_files:
-                if target_keyword in local_file.name.lower():
-                    print(
-                        f"[X] Stale package block version detected on storage media: {local_file.name}"
-                    )
-                    print(
-                        "[*] Performing file node eviction to maintain disk constraints..."
-                    )
-                    try:
-                        local_file.unlink()
-                    except Exception as e:
-                        print(f"[-] Node clearance exception error: {e}")
 
         # Execute final write loop
         final_file_destination = download_target_dir / latest_filename
