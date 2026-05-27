@@ -1,4 +1,13 @@
-"""Discover Ventoy drives and locate ISO files."""
+"""
+Discover Ventoy drives and locate ISO files.
+!/src/finder.py
+
+What it does:
+- Detects Ventoy volumes on Windows, macOS and Linux
+- Reads ISO volume IDs straight from the file header
+- Maps IDs/filenames to friendly distro names using config.toml or simple rules
+- Lists .iso files under a directory and returns their detected names
+"""
 
 from pathlib import Path
 
@@ -27,7 +36,9 @@ def find_ventoy_drives() -> list[Path]:
     system = platform.system()
     detected_paths = []
 
-    if system == "Linux":
+    if (
+        system == "Linux"
+    ):  # ERROR: HASNT BEEN TESTED ON LINUX YET, BUT SHOULD WORK THEORETICALLY
         import json
 
         cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT", "--json"]
@@ -50,7 +61,9 @@ def find_ventoy_drives() -> list[Path]:
         except (json.JSONDecodeError, KeyError):
             return []
 
-    elif system == "Darwin":  # macOS
+    elif (
+        system == "Darwin"
+    ):  # macOS <-- This will be able to be tested the most as it is my OS of choice
         import plistlib
 
         # Query diskutil for a list of all connected disks in Plist (XML) format
@@ -76,7 +89,9 @@ def find_ventoy_drives() -> list[Path]:
         except Exception:
             return []
 
-    elif system == "Windows":
+    elif (
+        system == "Windows"
+    ):  # ERROR: HASNT BEEN TESTED ON WINDOWS YET, BUT SHOULD WORK THEORETICALLY
         import json
 
         # Force a JSON array expression using @(...) and match Ventoy or VTOYEFI labels
@@ -106,12 +121,14 @@ def find_ventoy_drives() -> list[Path]:
             return []
 
     else:
-        raise NotImplementedError(f"Unsupported operating system: {system}")
+        raise NotImplementedError(
+            f"Unsupported operating system: {system}\nThis script currently supports Windows, macOS, and Linux.\nTo add support for your OS, please contribute to github.com/hxmbl/visync"
+        )
 
     # Error handling for when multiple Ventoy targets are found
     if len(detected_paths) > 1:
         raise RuntimeError(
-            f"Multiple Ventoy drives detected, this is not supported *yet*: {[str(p) for p in detected_paths]}. Please connect only one."
+            f"Multiple Ventoy drives detected, this is not supported *yet*: {[str(p) for p in detected_paths]}. \nPlease connect only one."
         )
 
     return detected_paths
@@ -124,7 +141,7 @@ def get_iso_volume_id(iso_path: Path) -> str:
             # Skip directly to the ISO 9660 primary descriptor header
             f.seek(32808)
             volume_id = f.read(32)
-            return volume_id.decode("utf-8", errors="ignore").strip()
+            return volume_id.decode("utf-8", errors="ignore").strip("\x00 ")
     except Exception:
         return ""
 
