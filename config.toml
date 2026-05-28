@@ -56,6 +56,9 @@ strategy = "fedora_nested"
 base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
 version_regex = 'href="([0-9\.]+)/"'
 iso_regex = 'href="(Fedora-Workstation-Live-x86_64-[0-9\.-]+\.iso)"'
+checksum_url = "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM"
+checksum_format = "gpg_checksum"
+signing_key_url = "https://fedoraproject.org/fedora.gpg"
 
 [distros.ArchLinux]
 clean_name = "Arch Linux"
@@ -63,6 +66,9 @@ keyword = "archlinux"
 strategy = "direct_match"
 base_url = "https://geo.mirror.pkgbuild.com/iso/latest/"
 iso_regex = 'href="(archlinux-[0-9\.]+-x86_64\.iso)"'
+checksum_url = "{base_url}sha256sums.txt"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
 
 [distros.UbuntuServer]
 clean_name = "Ubuntu Server"
@@ -71,6 +77,9 @@ strategy = "ubuntu_nested"
 base_url = "https://releases.ubuntu.com/"
 version_regex = 'href="([0-9\.]+)/"'
 iso_regex = 'href="(ubuntu-[0-9\.-]+live-server-amd64\.iso)"'
+checksum_url = "{base_url}{version}/SHA256SUMS"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
 
 ################
 ##### ARM ######
@@ -84,6 +93,9 @@ base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases
 version_regex = 'href="([0-9\.]+)/"'
 # Fedora lists aarch64 images under its standard variant subtrees
 iso_regex = 'href="(Fedora-Workstation-Live-aarch64-[0-9\.-]+\.iso)"'
+# checksum_url: needs version — same pattern as Fedora x86_64
+# checksum_format = "gpg_checksum"
+# signing_key_url = "https://fedoraproject.org/fedora.gpg"
 
 [distros.ArchLinuxARM]
 clean_name = "Arch Linux ARM"

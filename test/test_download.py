@@ -9,12 +9,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.download import (
-    download_iso,
-    fetch_html,
-    load_config,
-    process_scraping_strategy,
-)
+from src.download import *
 
 
 def _section(title: str) -> None:

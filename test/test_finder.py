@@ -7,21 +7,33 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.finder import (
-    find_installed_isos,
-    find_installed_isos_formatted,
-    find_ventoy_drives,
-    get_iso_volume_id,
-)
+from src.finder import *
 
 
-HAS_VENTOY = False
-_ventoy_drives = []
-try:
-    _ventoy_drives = find_ventoy_drives()
-    HAS_VENTOY = bool(_ventoy_drives)
-except Exception:
-    pass
+def _detect_ventoy() -> tuple[bool, list[Path]]:
+    """Check for Ventoy drive using a lightweight label probe, then full detection."""
+    found = False
+    drives: list[Path] = []
+    try:
+        import subprocess
+
+        found = (
+            subprocess.run(
+                ["blkid", "-L", "Ventoy"], capture_output=True, timeout=10
+            ).returncode
+            == 0
+        )
+    except Exception:
+        pass
+    if found:
+        try:
+            drives = find_ventoy_drives()
+        except Exception:
+            pass
+    return found, drives
+
+
+HAS_VENTOY, _ventoy_drives = _detect_ventoy()
 
 
 def _section(title: str) -> None:

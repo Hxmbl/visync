@@ -13,11 +13,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.finder import find_installed_isos, find_ventoy_drives
 
 
-def load_config() -> dict:
+def load_config(config_path: Path | None = None) -> dict:
     """Load configuration dictionary maps and distro settings from config.toml."""
-    config_path = Path(__file__).parent.parent / "config.toml"
+    path = config_path or Path(__file__).parent.parent / "config.toml"
     try:
-        with open(config_path, "rb") as f:
+        with open(path, "rb") as f:
             return tomllib.load(f)
     except Exception as e:
         print(f"[-] Critical Error: Failed to parse config.toml database: {e}")

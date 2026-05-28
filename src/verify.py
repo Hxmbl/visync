@@ -1,13 +1,335 @@
-"""Verify ISO integrity using checksums."""
+"""Verify ISO integrity using checksums.
 
+Supports multiple checksum formats:
+  - gpg_checksum  : GPG-inline-signed files (Fedora, CentOS, etc.)
+  - sha256sums    : Plain hash + filename files (Ubuntu, Arch, Debian)
+  - sha1sums      : Same format, SHA1
+  - json          : Signed JSON payloads (Tails latest.json)
+"""
+
+import hashlib
+import json
+import re
+import subprocess
+import tempfile
 from pathlib import Path
+from typing import Optional
+
+from urllib.request import urlopen
 
 
-def verify_checksum(iso_path: Path, checksum_path: Path) -> bool:
-    """Check the ISO against its checksum file."""
-    ...
+HASH_ALGOS = {
+    "sha256": hashlib.sha256,
+    "sha1": hashlib.sha1,
+    "sha512": hashlib.sha512,
+    "blake2b": hashlib.blake2b,
+}
 
 
-def verify_all_isos(iso_dir: Path) -> list[tuple[Path, bool]]:
-    """Verify all ISOs in a directory and return results."""
-    ...
+# ── Hash computation ──────────────────────────────────────────────
+
+
+def compute_iso_hash(iso_path: Path, algo: str = "sha256") -> str:
+    if algo not in HASH_ALGOS:
+        raise ValueError(f"Unsupported hash algorithm: {algo}")
+    h = HASH_ALGOS[algo]()
+    with open(iso_path, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# ── Network ────────────────────────────────────────────────────────
+
+
+def _fetch(url: str) -> str:
+    with urlopen(url, timeout=30) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+# ── GPG verification ──────────────────────────────────────────────
+
+
+def _import_key_then_verify(signed_path: Path, key_url: str) -> bool:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        gnupg_home = tmpdir
+        key_file = Path(tmpdir) / "signing.key"
+        try:
+            with urlopen(key_url, timeout=30) as resp:
+                key_file.write_bytes(resp.read())
+        except Exception:
+            return False
+
+        import_proc = subprocess.run(
+            ["gpg", "--homedir", gnupg_home, "--import", str(key_file)],
+            capture_output=True,
+        )
+        if import_proc.returncode != 0:
+            return False
+
+        verify_proc = subprocess.run(
+            ["gpg", "--homedir", gnupg_home, "--verify", str(signed_path)],
+            capture_output=True,
+        )
+        return verify_proc.returncode == 0
+
+
+# ── Checksum-file parsers ─────────────────────────────────────────
+
+
+def parse_gpg_checksum(content: str, iso_name: str) -> Optional[str]:
+    """Parse a GPG-inline-signed CHECKSUM file (e.g. Fedora).
+
+    Lines look like:  SHA256 (Fedora-Workstation-...iso) = <hex>
+    """
+    for line in content.splitlines():
+        line = line.strip()
+        m = re.search(
+            r"SHA(?:256|512)\s*\(([^)]*" + re.escape(iso_name) + r"[^)]*)\)\s*=\s*([a-fA-F0-9]{64,128})",
+            line,
+        )
+        if m:
+            return m.group(2).lower()
+    return None
+
+
+def _sums_filename(field: str) -> str:
+    """Normalize a SUMS filename field (strip binary-mode '*' prefix)."""
+    name = field.strip()
+    if name.startswith("*"):
+        name = name[1:]
+    return name
+
+
+def parse_hashsums(content: str, iso_name: str) -> Optional[str]:
+    """Parse a standard *SUMS file (hash  filename)."""
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2 and _sums_filename(parts[1]) == iso_name:
+            return parts[0].lower()
+    return None
+
+
+def parse_tails_json(content: str, iso_name: str = "") -> Optional[str]:
+    """Parse Tails latest.json containing a sha256 field."""
+    try:
+        data = json.loads(content)
+        return data.get("sha256", "").lower() or None
+    except (json.JSONDecodeError, AttributeError):
+        return None
+
+
+FORMAT_PARSERS = {
+    "gpg_checksum": parse_gpg_checksum,
+    "sha256sums":   parse_hashsums,
+    "sha1sums":     parse_hashsums,
+    "json":         parse_tails_json,
+}
+
+
+# ── Top-level verification ────────────────────────────────────────
+
+
+def verify_iso(
+    iso_path: Path,
+    checksum_url: str,
+    algo: str = "sha256",
+    checksum_format: str = "sha256sums",
+    signing_key_url: Optional[str] = None,
+) -> bool:
+    """Fetch a checksum, optionally verify its GPG signature, then compare.
+
+    Returns True if the local ISO hash matches the published checksum.
+    """
+    iso_name = iso_path.name
+
+    try:
+        content = _fetch(checksum_url)
+    except Exception:
+        return False
+
+    # GPG verification (inline-signed content)
+    if signing_key_url and checksum_format == "gpg_checksum":
+        with tempfile.TemporaryDirectory() as tmpdir:
+            signed = Path(tmpdir) / "CHECKSUM.asc"
+            signed.write_text(content)
+            if not _import_key_then_verify(signed, signing_key_url):
+                return False
+
+    parser = FORMAT_PARSERS.get(checksum_format)
+    if not parser:
+        return False
+
+    if checksum_format == "json":
+        expected = parser(content)
+    else:
+        expected = parser(content, iso_name)
+    if not expected:
+        return False
+
+    local = compute_iso_hash(iso_path, algo)
+    return local == expected
+
+
+def extract_iso_metadata(iso_name: str) -> dict[str, str]:
+    """Pull version/arch/path tokens from common ISO filenames."""
+    meta: dict[str, str] = {
+        "version": "",
+        "arch": "",
+        "variant_dir": "",
+        "checksum_stem": "",
+    }
+
+    fedora = re.match(
+        r"^(Fedora(?:-[A-Za-z]+)+-Live)-(\d+)-([\d\.]+)\.(x86_64|aarch64)\.iso$",
+        iso_name,
+        re.I,
+    )
+    if fedora:
+        live_prefix, major, minor, arch = fedora.groups()
+        meta["version"] = major
+        meta["arch"] = arch
+        meta["variant_dir"] = live_prefix.replace("-Live", "")
+        meta["checksum_stem"] = f"{live_prefix}-{major}-{minor}"
+        return meta
+
+    ubuntu = re.match(
+        r"^ubuntu-(\d+\.\d+(?:\.\d+)?)-live-server-amd64\.iso$", iso_name, re.I
+    )
+    if ubuntu:
+        meta["version"] = ubuntu.group(1)
+        return meta
+
+    arch = re.match(r"^archlinux-(\d+\.\d+\.\d+)-x86_64\.iso$", iso_name, re.I)
+    if arch:
+        meta["version"] = arch.group(1)
+        return meta
+
+    generic = re.search(r"(\d+\.\d+(?:\.\d+)?)", iso_name)
+    if generic:
+        meta["version"] = generic.group(1)
+    return meta
+
+
+def expand_url(template: str, iso_name: str, base_url: str = "") -> str:
+    base = base_url.rstrip("/")
+    meta = extract_iso_metadata(iso_name)
+    expanded = template.replace("{iso_name}", iso_name)
+    expanded = expanded.replace("{base_url}/", base + "/")
+    expanded = expanded.replace("{base_url}", base + "/")
+    expanded = expanded.replace("{version}", meta["version"])
+    expanded = expanded.replace("{arch}", meta["arch"])
+    expanded = expanded.replace("{variant_dir}", meta["variant_dir"])
+    expanded = expanded.replace("{checksum_stem}", meta["checksum_stem"])
+    return expanded
+
+
+def index_distro_configs(config: dict) -> dict[str, dict]:
+    """Map clean_name → distro settings from [distros.*] tables."""
+    indexed: dict[str, dict] = {}
+    for _key, settings in config.get("distros", {}).items():
+        name = settings.get("clean_name") or _key
+        indexed[name] = settings
+    return indexed
+
+
+def resolve_distro_settings(
+    detected_name: str,
+    iso_name: str,
+    distro_configs: dict[str, dict],
+) -> dict:
+    """Match detected distro to config by name, then filename keyword."""
+    if detected_name in distro_configs:
+        return distro_configs[detected_name]
+    iso_lower = iso_name.lower()
+    for settings in distro_configs.values():
+        keyword = settings.get("keyword", "")
+        if keyword and keyword.lower() in iso_lower:
+            return settings
+    return {}
+
+
+def build_iso_distro_map(iso_dir: Path) -> dict[str, tuple[Path, str]]:
+    """Map ISO path string → (path, detected distro name)."""
+    from src.finder import find_installed_isos, get_iso_volume_id, identify_distro
+
+    distro_map: dict[str, tuple[Path, str]] = {}
+    for iso_path in find_installed_isos(iso_dir):
+        volume_id = get_iso_volume_id(iso_path)
+        distro_name = identify_distro(volume_id, iso_path.name)
+        distro_map[str(iso_path)] = (iso_path, distro_name)
+    return distro_map
+
+
+def run_directory_verify(
+    iso_dir: Path, config: dict
+) -> list[tuple[Path, str, Optional[bool]]]:
+    """Identify ISOs under *iso_dir* and verify each against config."""
+    distro_map = build_iso_distro_map(iso_dir)
+    distro_configs = index_distro_configs(config)
+    checksums_config = config.get("checksums", {})
+    results: list[tuple[Path, str, Optional[bool]]] = []
+    for iso_path, distro_name in distro_map.values():
+        settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
+        result = verify_from_config(iso_path, distro_name, settings, checksums_config)
+        results.append((iso_path, distro_name, result))
+    return results
+
+
+def verify_from_config(
+    iso_path: Path,
+    distro_name: str,
+    distro_config: dict,
+    checksums_config: dict,
+) -> Optional[bool]:
+    """Verify a single ISO using its distro's checksum configuration.
+
+    Returns True/False on success, None if no checksum config is available.
+    """
+    if not checksums_config.get("enabled", True):
+        return None
+
+    checksum_url = distro_config.get("checksum_url")
+    if not checksum_url:
+        return None
+
+    iso_name = iso_path.name
+    base_url = distro_config.get("base_url", "")
+    checksum_url = expand_url(checksum_url, iso_name, base_url)
+
+    algo = distro_config.get("checksum_algo", "sha256")
+    fmt = distro_config.get("checksum_format", "sha256sums")
+    key_url = distro_config.get("signing_key_url")
+
+    return verify_iso(
+        iso_path=iso_path,
+        checksum_url=checksum_url,
+        algo=algo,
+        checksum_format=fmt,
+        signing_key_url=key_url,
+    )
+
+
+def verify_all_isos(
+    iso_dir: Path,
+    distro_map: dict[str, tuple[Path, str]],
+    distro_configs: dict[str, dict],
+    checksums_config: dict,
+) -> list[tuple[Path, str, Optional[bool]]]:
+    """Verify all ISOs in a directory against their distro's checksums.
+
+    *distro_map* maps ISO path string → (iso_path, distro_name).
+    Returns list of (iso_path, distro_name, result).
+    """
+    results: list[tuple[Path, str, Optional[bool]]] = []
+    for iso_path, distro_name in distro_map.values():
+        settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
+        result = verify_from_config(iso_path, distro_name, settings, checksums_config)
+        results.append((iso_path, distro_name, result))
+    return results

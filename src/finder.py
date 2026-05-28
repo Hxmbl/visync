@@ -22,6 +22,43 @@ def _distro_config_path() -> Path:
     return cwd_config
 
 
+def _mount_device(dev: str, detected: list[Path]) -> None:
+    """Try to mount a device temporarily and add its path if successful."""
+    import subprocess
+
+    import tempfile
+
+    mount_dir = Path(tempfile.mkdtemp(prefix="ventoy_"))
+    try:
+        subprocess.run(
+            ["mount", dev, str(mount_dir)],
+            capture_output=True, timeout=10,
+        )
+        if mount_dir.is_dir() and any(mount_dir.iterdir()):
+            detected.append(mount_dir)
+    except Exception:
+        pass
+
+
+def _try_mount_ventoy(partition: dict, detected: list[Path]) -> None:
+    """When Ventoy data partition is unmounted, find the dm-exposed device and mount it."""
+    for child in partition.get("children", []):
+        if child.get("mountpoint"):
+            continue
+        child_name = child.get("name", "")
+        child_type = child.get("type", "")
+        if not child_name:
+            continue
+        # dm devices live under /dev/mapper/<name>
+        if child_type == "dm":
+            dev_path = f"/dev/mapper/{child_name}"
+        else:
+            dev_path = f"/dev/{child_name}"
+        _mount_device(dev_path, detected)
+        if detected:
+            return
+
+
 def find_ventoy_drives() -> list[Path]:
     """
     Detect mounted Ventoy drives across different operating systems.
@@ -35,30 +72,47 @@ def find_ventoy_drives() -> list[Path]:
     system = platform.system()
     detected_paths = []
 
-    if (
-        system == "Linux"
-    ):  # ERROR: HASNT BEEN TESTED ON LINUX YET, BUT SHOULD WORK THEORETICALLY
+    if system == "Linux":
         import json
 
-        cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT", "--json"]
+        cmd = ["lsblk", "-o", "NAME,TYPE,LABEL,MOUNTPOINT", "--json"]
         result = subprocess.run(cmd, capture_output=True, text=True)
 
-        if result.returncode != 0 or not result.stdout.strip():
-            return []
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                data = json.loads(result.stdout)
+                for device in data.get("blockdevices", []):
+                    for partition in device.get("children", []):
+                        label = partition.get("label")
+                        mount = partition.get("mountpoint")
+                        if label in ("Ventoy", "VTOYEFI"):
+                            if mount:
+                                detected_paths.append(Path(mount))
+                            elif label == "Ventoy":
+                                _try_mount_ventoy(partition, detected_paths)
+            except (json.JSONDecodeError, KeyError):
+                pass
 
-        try:
-            data = json.loads(result.stdout)
-
-            for device in data.get("blockdevices", []):
-                for partition in device.get("children", []):
-                    # Match either Ventoy storage or Ventoy EFI partition
-                    if partition.get("label") in [
-                        "Ventoy",
-                        "VTOYEFI",
-                    ] and partition.get("mountpoint"):
-                        detected_paths.append(Path(partition["mountpoint"]))
-        except (json.JSONDecodeError, KeyError):
-            return []
+        # Fallback: blkid + findmnt (covers systems without lsblk)
+        if not detected_paths:
+            for lbl in ("Ventoy", "VTOYEFI"):
+                try:
+                    blkid_proc = subprocess.run(
+                        ["blkid", "-L", lbl], capture_output=True, text=True, timeout=10
+                    )
+                    if blkid_proc.returncode != 0 or not blkid_proc.stdout.strip():
+                        continue
+                    dev = blkid_proc.stdout.strip()
+                    mnt_proc = subprocess.run(
+                        ["findmnt", "-n", "-o", "TARGET", dev],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if mnt_proc.returncode == 0 and mnt_proc.stdout.strip():
+                        detected_paths.append(Path(mnt_proc.stdout.strip()))
+                    elif lbl == "Ventoy":
+                        _mount_device(dev, detected_paths)
+                except Exception:
+                    continue
 
     elif (
         system == "Darwin"
