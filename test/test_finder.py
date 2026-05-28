@@ -205,8 +205,10 @@ if __name__ == "__main__":
     print(f"  {'#' * 62}")
     print()
 
-    if HAS_VENTOY:
+    if HAS_VENTOY and _ventoy_drives:
         _info(f"Ventoy drive detected: {_ventoy_drives[0]}")
+    elif HAS_VENTOY:
+        _skip("Ventoy label found but mount failed (try sudo)")
     else:
         _skip("No Ventoy drive detected — hardware-dependent tests will be skipped")
     print()

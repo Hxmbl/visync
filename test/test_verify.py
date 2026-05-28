@@ -343,7 +343,7 @@ class TestVerifyAllIsos(unittest.TestCase):
             "Arch Linux": {"checksum_url": "https://example.com/sha256sums.txt"},
             "Ubuntu Server": {},
         }
-        results = verify_all_isos(iso_dir, distro_map, configs, {})
+        results = verify_all_isos(distro_map, configs, {})
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0][1], "Arch Linux")
         self.assertEqual(results[1][1], "Ubuntu Server")

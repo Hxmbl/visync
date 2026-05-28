@@ -14,8 +14,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
-
 from urllib.request import urlopen
+
+from src.finder import find_installed_isos, get_iso_volume_id, identify_distro
 
 
 HASH_ALGOS = {
@@ -55,7 +56,6 @@ def _fetch(url: str) -> str:
 
 def _import_key_then_verify(signed_path: Path, key_url: str) -> bool:
     with tempfile.TemporaryDirectory() as tmpdir:
-        gnupg_home = tmpdir
         key_file = Path(tmpdir) / "signing.key"
         try:
             with urlopen(key_url, timeout=30) as resp:
@@ -64,14 +64,14 @@ def _import_key_then_verify(signed_path: Path, key_url: str) -> bool:
             return False
 
         import_proc = subprocess.run(
-            ["gpg", "--homedir", gnupg_home, "--import", str(key_file)],
+            ["gpg", "--homedir", tmpdir, "--import", str(key_file)],
             capture_output=True,
         )
         if import_proc.returncode != 0:
             return False
 
         verify_proc = subprocess.run(
-            ["gpg", "--homedir", gnupg_home, "--verify", str(signed_path)],
+            ["gpg", "--homedir", tmpdir, "--verify", str(signed_path)],
             capture_output=True,
         )
         return verify_proc.returncode == 0
@@ -257,8 +257,6 @@ def resolve_distro_settings(
 
 def build_iso_distro_map(iso_dir: Path) -> dict[str, tuple[Path, str]]:
     """Map ISO path string → (path, detected distro name)."""
-    from src.finder import find_installed_isos, get_iso_volume_id, identify_distro
-
     distro_map: dict[str, tuple[Path, str]] = {}
     for iso_path in find_installed_isos(iso_dir):
         volume_id = get_iso_volume_id(iso_path)
@@ -317,7 +315,6 @@ def verify_from_config(
 
 
 def verify_all_isos(
-    iso_dir: Path,
     distro_map: dict[str, tuple[Path, str]],
     distro_configs: dict[str, dict],
     checksums_config: dict,
