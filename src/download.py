@@ -272,15 +272,25 @@ def sync_all_configured_distros():
             for entry_id, settings in distro_scrapers.items()
         }
         for future in concurrent.futures.as_completed(future_map):
-            entry_id, clean_name, latest_filename, up_to_date, download_url = future.result()
+            try:
+                entry_id, clean_name, latest_filename, up_to_date, download_url = future.result()
+            except (TimeoutError, ConnectionResetError, OSError) as e:
+                print(f"[✗] Failed syncing {future_map[future]}: {e}")
+                continue
             if up_to_date or not download_url:
                 continue
             pending_downloads.append((download_url, latest_filename))
 
     # Execute downloads sequentially (heavy disk I/O)
     for download_url, latest_filename in pending_downloads:
-        final_file_destination = download_target_dir / latest_filename
-        download_iso(download_url, final_file_destination)
+        dest = download_target_dir / latest_filename
+        part_file = dest.with_suffix(dest.suffix + ".part")
+        try:
+            download_iso(download_url, dest)
+        except (TimeoutError, ConnectionResetError, OSError) as e:
+            print(f"[✗] Failed syncing {latest_filename}: {e}")
+            part_file.unlink(missing_ok=True)
+            continue
 
 
 if __name__ == "__main__":
