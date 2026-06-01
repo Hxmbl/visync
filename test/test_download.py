@@ -61,36 +61,16 @@ class TestFetchHtml(unittest.TestCase):
         self.assertEqual(result, "")
         _ok("Anubis challenge detected, empty string returned")
 
-    @patch("builtins.input", return_value="n")
     @patch("src.download.urllib.request.urlopen")
     @patch("src.download.urllib.request.Request")
-    def test_ssl_error_user_declines(
-        self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_input: MagicMock
+    def test_ssl_error_auto_skips(
+        self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
-        _section("fetch_html: SSL Error — Declined")
-        mock_urlopen.side_effect = urllib.error.URLError(
-            "SSL: CERTIFICATE_VERIFY_FAILED"
-        )
+        _section("fetch_html: SSL Error — Auto Skip (Non-Interactive)")
+        mock_urlopen.side_effect = urllib.error.URLError("SSL: CERTIFICATE_VERIFY_FAILED")
         result = fetch_html("https://example.com")
         self.assertEqual(result, "")
-        _ok("SSL declined, empty string returned")
-
-    @patch("builtins.input", return_value="y")
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
-    def test_ssl_error_user_accepts(
-        self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_input: MagicMock
-    ):
-        _section("fetch_html: SSL Error — Accepted")
-        mock_response = MagicMock()
-        mock_response.read.return_value = b"<html>content</html>"
-        mock_response.__enter__.return_value = mock_response
-
-        ssl_error = urllib.error.URLError("SSL: CERTIFICATE_VERIFY_FAILED")
-        mock_urlopen.side_effect = [ssl_error, mock_response]
-        result = fetch_html("https://example.com")
-        self.assertEqual(result, "<html>content</html>")
-        _ok("SSL bypassed, content returned on retry")
+        _ok("SSL error returns empty string without prompting (non-interactive)")
 
 
 class TestLoadConfig(unittest.TestCase):

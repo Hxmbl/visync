@@ -3,15 +3,35 @@
 import concurrent.futures
 import re
 import shutil
+import socket
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Adjust standard path imports for internal source files
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.finder import find_installed_isos, find_ventoy_drives, load_config
 from src.verify import compare_versions, extract_version_from_filename
+
+# Watchdog constants
+MIRROR_CONNECT_TIMEOUT = 5      # TCP ping timeout (seconds)
+MIRROR_HTTP_TIMEOUT = 10        # HTTP request timeout (seconds)
+PER_DISTRO_TIMEOUT = 30         # Hard deadline per distro scrape (seconds)
+SCRAPE_DEADLINE = 120           # Overall wall-clock limit for all scraping (seconds)
+
+
+def ping_mirror(url: str) -> bool:
+    """Pre-flight TCP connectivity check. Returns True if host is reachable."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        with socket.create_connection((host, port), timeout=MIRROR_CONNECT_TIMEOUT):
+            return True
+    except (socket.timeout, OSError):
+        return False
 
 
 def fetch_html(url: str, allow_insecure: bool = False) -> str:
@@ -23,7 +43,7 @@ def fetch_html(url: str, allow_insecure: bool = False) -> str:
             import ssl
 
             ctx = ssl._create_unverified_context()
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+        with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT, context=ctx) as response:
             html = response.read().decode("utf-8", errors="ignore")
             # Detect bot-protected pages (e.g. Anubis proof-of-work)
             if "Anubis" in html[:1000]:
@@ -41,16 +61,7 @@ Anubis binds the challenge to this specific HTTP session.)")
             print(
                 f"[-] SSL certificate verification failed for {url}\n    Details: {e}"
             )
-            try:
-                answer = input(
-                    "[?] SSL verification failed. Retry with an insecure connection? (y/N): "
-                )
-            except EOFError:
-                print("\n[-] No input detected. Defaulting to 'No' to ensure security.")
-                answer = "n"
-            if answer.lower() == "y":
-                return fetch_html(url, allow_insecure=True)
-            print("    Skipping this mirror.")
+            print("    Skipping this mirror (non-interactive mode).")
             return ""
         print(f"[-] Network link failure targeting mirror node {url}: {e}")
         return ""
@@ -64,6 +75,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     strategy = settings.get("strategy")
     base_url = settings.get("base_url")
     iso_regex = settings.get("iso_regex")
+
+    # Pre-flight connectivity check — skip dead mirrors instantly
+    if not ping_mirror(base_url):
+        print(f"[-] Mirror unreachable (ping failed): {base_url}")
+        return "", ""
 
     # Strategy A: Direct Index File Tracking (e.g. Arch Linux)
     if strategy == "direct_match":
@@ -291,22 +307,32 @@ def sync_all_configured_distros():
             f"[*] Direct Volume Mode Enabled -> Writing to mount path: {download_target_dir}"
         )
 
-    # Scrape all mirrors concurrently
+    # Scrape all mirrors concurrently with watchdog protection
     pending_downloads: list[tuple[str, str]] = []
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    scrape_start = __import__("time").monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers)) as executor:
         future_map = {
             executor.submit(_check_distro, entry_id, settings, ventoy_root): entry_id
             for entry_id, settings in distro_scrapers.items()
         }
-        for future in concurrent.futures.as_completed(future_map):
+        for future in concurrent.futures.as_completed(future_map, timeout=SCRAPE_DEADLINE):
+            elapsed = __import__("time").monotonic() - scrape_start
+            if elapsed > SCRAPE_DEADLINE:
+                print(f"[!] Watchdog: overall scrape deadline ({SCRAPE_DEADLINE}s) exceeded. Aborting scrape phase.")
+                break
             try:
-                entry_id, clean_name, latest_filename, up_to_date, download_url = future.result()
+                entry_id, clean_name, latest_filename, up_to_date, download_url = future.result(timeout=PER_DISTRO_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                print(f"[✗] Watchdog: {future_map[future]} scrape timed out ({PER_DISTRO_TIMEOUT}s limit). Skipping.")
+                continue
             except (TimeoutError, ConnectionResetError, OSError) as e:
                 print(f"[✗] Failed syncing {future_map[future]}: {e}")
                 continue
             if up_to_date or not download_url:
                 continue
             pending_downloads.append((download_url, latest_filename))
+        # Kill any stragglers
+        executor.shutdown(wait=False, cancel_futures=True)
 
     # Execute downloads sequentially (heavy disk I/O)
     for download_url, latest_filename in pending_downloads:
