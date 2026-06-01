@@ -86,6 +86,7 @@ HASH_ALGOS = {
 
 
 def compute_iso_hash(iso_path: Path, algo: str = "sha256") -> str:
+    """Compute the hex digest of an ISO file using the given hash algorithm."""
     if algo not in HASH_ALGOS:
         raise ValueError(f"Unsupported hash algorithm: {algo}")
     h = HASH_ALGOS[algo]()

@@ -1,6 +1,8 @@
-"""Scrape and synchronize any distribution dynamically configured inside config.toml."""
+"""Scrape and synchronize distributions configured in config.toml."""
 
 import concurrent.futures
+import hashlib
+import os
 import re
 import shutil
 import socket
@@ -10,33 +12,53 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Adjust standard path imports for internal source files
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.finder import find_installed_isos, find_ventoy_drives, get_iso_volume_id, identify_distro, load_config
+from src.finder import (
+    find_installed_isos,
+    find_ventoy_drives,
+    get_iso_volume_id,
+    identify_distro,
+    load_config,
+    write_iso_metadata,
+    remove_iso_metadata,
+    visync_watchdog,
+)
 from src.verify import compare_versions, extract_version_from_filename
 
-# Watchdog constants
-MIRROR_CONNECT_TIMEOUT = 5      # TCP ping timeout (seconds)
-MIRROR_HTTP_TIMEOUT = 10        # HTTP request timeout (seconds)
-PER_DISTRO_TIMEOUT = 30         # Hard deadline per distro scrape (seconds)
-SCRAPE_DEADLINE = 120           # Overall wall-clock limit for all scraping (seconds)
+DEBUG = os.environ.get("VISYNC_DEBUG", "0") == "1"
+
+
+def _debug(msg: str) -> None:
+    """Print a debug message when VISYNC_DEBUG=1."""
+    if DEBUG:
+        print(f"  [debug] {msg}", file=sys.stderr)
+
+
+MIRROR_CONNECT_TIMEOUT = 5
+MIRROR_HTTP_TIMEOUT = 10
+PER_DISTRO_TIMEOUT = 30
+SCRAPE_DEADLINE = 120
 DEFAULT_STAGING_DIR = Path("/tmp/visync_staging")
 
 
 def ping_mirror(url: str) -> bool:
     """Pre-flight TCP connectivity check. Returns True if host is reachable."""
+    _debug(f"Pinging {url}")
     try:
         parsed = urlparse(url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         with socket.create_connection((host, port), timeout=MIRROR_CONNECT_TIMEOUT):
+            _debug(f"Ping OK: {host}:{port}")
             return True
-    except (socket.timeout, OSError):
+    except (socket.timeout, OSError) as e:
+        _debug(f"Ping failed: {e}")
         return False
 
 
 def fetch_html(url: str, allow_insecure: bool = False) -> str:
-    """Download plain text source HTML from an external mirror index. (Web scraping. API in the future?)"""
+    """Download HTML source from a mirror index page."""
+    _debug(f"Fetching {url} (insecure={allow_insecure})")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         ctx = None
@@ -133,13 +155,12 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if match:
             return match.group(1), f"{iso_dir_url}{match.group(1)}"
 
-    # A later implementation could add a more generic "custom_parser" strategy that loads a user-defined Python module with custom parsing logic for more complex sites. Currently you have to choose from built-in strategies or add new ones manually in the code. Not really good.
-
     return "", ""
 
 
-def download_iso(url: str, dest_path: Path):
-    """Download streaming asset payloads showing direct feedback text trackers."""
+def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> None:
+    """Download an ISO file with streaming progress and optional metadata persistence."""
+    _debug(f"Starting download: {url} -> {dest_path}")
     print(f"[*] Extracting resource stream -> {dest_path.name}")
     print(
         "    Note: Progress shows 0% during connection setup. "
@@ -178,7 +199,7 @@ def download_iso(url: str, dest_path: Path):
     except Exception:
         pass
 
-    CHUNK_SIZE = 128000  # 128 KiB read buffer
+    CHUNK_SIZE = 128000
     part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
     try:
@@ -212,8 +233,36 @@ def download_iso(url: str, dest_path: Path):
     part_path.rename(dest_path)
     print("\n[✓] Asset file write sequence complete.")
 
-    # Post-download cleanup: remove older versions of the same distribution
+    sha256_hex = ""
+    if drive_root:
+        try:
+            h = hashlib.sha256()
+            with open(dest_path, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            sha256_hex = h.hexdigest()
+        except OSError:
+            pass
+
     _cleanup_old_versions(dest_path)
+
+    if drive_root and sha256_hex:
+        volume_id = get_iso_volume_id(dest_path)
+        version = ""
+        if volume_id:
+            version = extract_version_from_filename(dest_path.name)
+        variant_stem = _variant_stem(volume_id) if volume_id else ""
+        write_iso_metadata(
+            drive_root=drive_root,
+            filename=dest_path.name,
+            variant_stem=variant_stem,
+            version=version,
+            sha256=sha256_hex,
+        )
+        _debug(f"Metadata written for {dest_path.name}")
 
 
 def _cleanup_old_versions(new_iso: Path) -> None:
@@ -223,6 +272,7 @@ def _cleanup_old_versions(new_iso: Path) -> None:
     deleting different flavors (e.g. Fedora KDE vs Fedora Sway).
     Safe to call — deletion failures are logged but never crash the program.
     """
+    _debug(f"Cleanup check for {new_iso.name}")
     try:
         new_vid = get_iso_volume_id(new_iso)
         if not new_vid:
@@ -238,10 +288,8 @@ def _cleanup_old_versions(new_iso: Path) -> None:
         all_isos = find_installed_isos(target_dir)
 
         for iso_path in all_isos:
-            # Skip the file we just downloaded
             if iso_path == new_iso:
                 continue
-            # Skip non-ISO files and .part artifacts
             if iso_path.suffix.lower() != ".iso":
                 continue
 
@@ -252,13 +300,12 @@ def _cleanup_old_versions(new_iso: Path) -> None:
                 old_distro = identify_distro(old_vid, iso_path.name)
                 old_stem = _variant_stem(old_vid)
 
-                # Match on both distro name AND variant stem to avoid
-                # deleting different flavors (e.g. Fedora KDE when updating Fedora Sway)
                 if old_distro == new_distro and old_stem == new_stem:
                     print(
                         f"\x1b[33m[-] Removing deprecated image: {iso_path.name}\x1b[0m"
                     )
                     iso_path.unlink(missing_ok=True)
+                    remove_iso_metadata(new_iso.parent, iso_path.name)
             except OSError:
                 print(
                     f"[!] WARNING: Could not remove stale file: {iso_path.name}"
@@ -274,13 +321,13 @@ def _variant_stem(volume_id: str) -> str:
 
     Version tokens are segments that start with a digit (e.g. '44', '24.04.4').
     Architecture tokens like 'x86_64' and 'amd64' are preserved because they start
-    with a letter, even though they contain digits. This distinguishes Fedora KDE
-    from Fedora Sway from Fedora Everything.
+    with a letter, even though they contain digits. Consecutive separators
+    (from removed version tokens) are collapsed into a single hyphen.
 
     Examples:
         'Fedora-E-dvd-x86_64-44'         → 'fedora-e-dvd-x86_64'
         'Fedora-KDE-Live-44'             → 'fedora-kde-live'
-        'Ubuntu-Server 24.04.4 LTS amd64' → 'ubuntu-server lts amd64'
+        'Ubuntu-Server 24.04.4 LTS amd64' → 'ubuntu-server-amd64'
     """
     import re as _re
 
@@ -304,17 +351,16 @@ def _variant_stem(volume_id: str) -> str:
         cleaned.append(token)
 
     stem = "".join(cleaned)
-    # Restore architecture underscores
     stem = stem.replace("§", "_")
-    # Normalize release tier labels (LTS, ESD, etc.) that differ between versions
     stem = _re.sub(r"\b(lts|esd|point)\b", "", stem, flags=_re.I)
-    stem = _re.sub(r"\s+", " ", stem).strip(" -_")
+    stem = _re.sub(r"[\s\-]+", "-", stem).strip(" -_")
     return stem.lower()
 
 
 def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool = False) -> tuple[str, str, str, bool, str | None]:
     """Scrape and version-check a single distro. Returns metadata for download decisions."""
     clean_name = settings.get("clean_name", entry_id)
+    _debug(f"Checking {clean_name} (force={force})")
     print(f"\n=== PROCESSING REPOSITORY SYNCHRONIZATION: {clean_name.upper()} ===")
 
     latest_filename, download_url = process_scraping_strategy(clean_name, settings)
@@ -378,6 +424,7 @@ def _cleanup_part_files(*directories: Path) -> None:
 
 def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
     """Iterate through user-defined scrapers to pull updates down safely."""
+    _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force})")
     config = load_config()
     distro_scrapers = config.get("distros", {})
     iso_settings = config.get("iso", {})
@@ -388,17 +435,16 @@ def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
         )
         return
 
-    # Check for CLI bypass flag
     use_buffer = "--no-buffer" not in sys.argv
 
-    # Track target paths
     drives = find_ventoy_drives()
     if not drives:
         print("[-] ERROR: No Ventoy drives found.")
         return
     ventoy_root = drives[0]
 
-    # Establish output path limits
+    visync_watchdog(ventoy_root)
+
     config_download_dir = iso_settings.get("download_dir", "").strip()
     if use_buffer:
         download_target_dir = Path(config_download_dir) if config_download_dir else DEFAULT_STAGING_DIR
@@ -410,7 +456,6 @@ def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
             f"[*] Direct Volume Mode Enabled -> Writing to mount path: {download_target_dir}"
         )
 
-    # Scrape all mirrors concurrently with watchdog protection
     pending_downloads: list[tuple[str, str]] = []
     scrape_start = __import__("time").monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers)) as executor:
@@ -434,10 +479,8 @@ def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
             if up_to_date or not download_url:
                 continue
             pending_downloads.append((download_url, latest_filename))
-        # Kill any stragglers
         executor.shutdown(wait=False, cancel_futures=True)
 
-    # Execute downloads sequentially (heavy disk I/O)
     if dry_run:
         if not pending_downloads:
             print("[*] Dry run: nothing to download — all ISOs are current.")
@@ -451,7 +494,7 @@ def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
             dest = download_target_dir / latest_filename
             part_file = dest.with_suffix(dest.suffix + ".part")
             try:
-                download_iso(download_url, dest)
+                download_iso(download_url, dest, drive_root=ventoy_root)
             except (TimeoutError, ConnectionResetError, OSError) as e:
                 print(f"[✗] Failed syncing {latest_filename}: {e}")
                 part_file.unlink(missing_ok=True)
@@ -468,8 +511,7 @@ if __name__ == "__main__":
         sync_all_configured_distros()
     except KeyboardInterrupt:
         print("\n\x1b[31m✕ Sync canceled by user. Cleaning up partial downloads...\x1b[0m")
-        from src.finder import load_config as _cfg
-        _config = _cfg()
+        _config = load_config()
         _iso_settings = _config.get("iso", {})
         _cleanup_targets: list[Path] = []
         _download_dir = _iso_settings.get("download_dir", "").strip()
