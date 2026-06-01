@@ -248,6 +248,15 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str
     return entry_id, clean_name, latest_filename, False, download_url
 
 
+def _cleanup_part_files(*directories: Path) -> None:
+    """Delete any leftover .part files from the given directories."""
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for part_file in directory.rglob("*.part"):
+            part_file.unlink(missing_ok=True)
+
+
 def sync_all_configured_distros():
     """Iterate through user-defined scrapers to pull updates down safely."""
     config = load_config()
@@ -310,9 +319,26 @@ def sync_all_configured_distros():
             part_file.unlink(missing_ok=True)
             continue
 
+    return download_target_dir
+
 
 if __name__ == "__main__":
     print("====================================================")
     print("     VISYNC PROTOCOL LOGISTICAL EXTENSION ENGINE    ")
     print("====================================================")
-    sync_all_configured_distros()
+    try:
+        sync_all_configured_distros()
+    except KeyboardInterrupt:
+        print("\n\x1b[31m✕ Sync canceled by user. Cleaning up partial downloads...\x1b[0m")
+        from src.finder import load_config as _cfg
+        _config = _cfg()
+        _iso_settings = _config.get("iso", {})
+        _cleanup_targets: list[Path] = []
+        _download_dir = _iso_settings.get("download_dir", "").strip()
+        if _download_dir:
+            _cleanup_targets.append(Path(_download_dir))
+        _drives = find_ventoy_drives()
+        if _drives:
+            _cleanup_targets.append(_drives[0])
+        _cleanup_part_files(*_cleanup_targets)
+        raise SystemExit(130)
