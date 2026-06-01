@@ -1,5 +1,6 @@
 """Scrape and synchronize any distribution dynamically configured inside config.toml."""
 
+import concurrent.futures
 import re
 import shutil
 import sys
@@ -163,20 +164,24 @@ def download_iso(url: str, dest_path: Path):
                 return
         else:
             print(
-                f"    Available disk space: {available / (1024**3):.2f} GiB "
-                f"(unknown download size, skipping space check)"  # <--- THIS IS RISKY.
+                f"    Available disk space: {available / (1024**3):.2f} GiB"
+            )
+            print(
+                "    [!] WARNING: Content-Length missing or unknown. "
+                "Proceeding with download; disk space cannot be verified."
             )
     except Exception:
         pass
 
-    CHUNK_SIZE = 8192  # 8 KiB read buffer
+    CHUNK_SIZE = 128000  # 128 KiB read buffer
+    part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
     try:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=30) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
-            with open(dest_path, "wb") as f:
+            with open(part_path, "wb", buffering=1048576) as f:
                 while True:
                     chunk = resp.read(CHUNK_SIZE)
                     if not chunk:
@@ -190,11 +195,39 @@ def download_iso(url: str, dest_path: Path):
                             f"{total / (1024**2):.0f} MiB ({percent:.1f}%)"
                         )
                         sys.stdout.flush()
-        print(
-            "\n[✓] Asset file write sequence complete."
-        )  # <--- No need for this to have been an f-string since there are no variables.
+    except OSError as e:
+        print(f"\n[-] Write/disk error during download: {e}")
+        part_path.unlink(missing_ok=True)
+        return
     except Exception as e:
-        print(f"\n[-] Resource save exception tracking download: {e}")
+        print(f"\n[-] Network error during download: {e}")
+        part_path.unlink(missing_ok=True)
+        return
+
+    part_path.rename(dest_path)
+    print("\n[✓] Asset file write sequence complete.")
+
+
+def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str, str, str, bool, str | None]:
+    """Scrape and version-check a single distro. Returns metadata for download decisions."""
+    clean_name = settings.get("clean_name", entry_id)
+    print(f"\n=== PROCESSING REPOSITORY SYNCHRONIZATION: {clean_name.upper()} ===")
+
+    latest_filename, download_url = process_scraping_strategy(clean_name, settings)
+    if not latest_filename:
+        print(
+            f"[-] Unable to determine remote file properties for {clean_name}. Skipping section."
+        )
+        return entry_id, clean_name, "", False, None
+
+    print(f"[+] Current upstream variant reference target: {latest_filename}")
+
+    local_ventoy_files = find_installed_isos(ventoy_root)
+    if any(f.name == latest_filename for f in local_ventoy_files):
+        print(f"[✓] {clean_name} is fully initialized and matches upstream build.")
+        return entry_id, clean_name, latest_filename, True, None
+
+    return entry_id, clean_name, latest_filename, False, download_url
 
 
 def sync_all_configured_distros():
@@ -231,28 +264,21 @@ def sync_all_configured_distros():
             f"[*] Direct Volume Mode Enabled -> Writing to mount path: {download_target_dir}"
         )
 
-    # Process all user entries one by one
-    for entry_id, settings in distro_scrapers.items():
-        clean_name = settings.get("clean_name", entry_id)
-        print(f"\n=== PROCESSING REPOSITORY SYNCHRONIZATION: {clean_name.upper()} ===")
+    # Scrape all mirrors concurrently
+    pending_downloads: list[tuple[str, str]] = []
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future_map = {
+            executor.submit(_check_distro, entry_id, settings, ventoy_root): entry_id
+            for entry_id, settings in distro_scrapers.items()
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            entry_id, clean_name, latest_filename, up_to_date, download_url = future.result()
+            if up_to_date or not download_url:
+                continue
+            pending_downloads.append((download_url, latest_filename))
 
-        latest_filename, download_url = process_scraping_strategy(clean_name, settings)
-        if not latest_filename:
-            print(
-                f"[-] Unable to determine remote file properties for {clean_name}. Skipping section."
-            )
-            continue
-
-        print(f"[+] Current upstream variant reference target: {latest_filename}")
-
-        # Scan active device profiles
-        local_ventoy_files = find_installed_isos(ventoy_root)
-
-        if any(f.name == latest_filename for f in local_ventoy_files):
-            print(f"[✓] {clean_name} is fully initialized and matches upstream build.")
-            continue
-
-        # Execute final write loop
+    # Execute downloads sequentially (heavy disk I/O)
+    for download_url, latest_filename in pending_downloads:
         final_file_destination = download_target_dir / latest_filename
         download_iso(download_url, final_file_destination)
 
