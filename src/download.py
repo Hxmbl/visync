@@ -216,9 +216,10 @@ def download_iso(url: str, dest_path: Path):
 
 
 def _cleanup_old_versions(new_iso: Path) -> None:
-    """Scan the target directory and delete older ISOs of the same distribution.
+    """Scan the target directory and delete older ISOs of the same distribution variant.
 
-    Uses volume ID to match distros regardless of filename changes.
+    Uses volume ID to match distros, and extracts a variant stem to avoid
+    deleting different flavors (e.g. Fedora KDE vs Fedora Sway).
     Safe to call — deletion failures are logged but never crash the program.
     """
     try:
@@ -226,6 +227,7 @@ def _cleanup_old_versions(new_iso: Path) -> None:
         if not new_vid:
             return
         new_distro = identify_distro(new_vid, new_iso.name)
+        new_stem = _variant_stem(new_vid)
 
         # Skip unknown or generic matches — don't delete anything we can't positively identify
         if new_distro in ("Unknown OS", ""):
@@ -247,8 +249,11 @@ def _cleanup_old_versions(new_iso: Path) -> None:
                 if not old_vid:
                     continue
                 old_distro = identify_distro(old_vid, iso_path.name)
+                old_stem = _variant_stem(old_vid)
 
-                if old_distro == new_distro:
+                # Match on both distro name AND variant stem to avoid
+                # deleting different flavors (e.g. Fedora KDE when updating Fedora Sway)
+                if old_distro == new_distro and old_stem == new_stem:
                     print(
                         f"\x1b[33m[-] Removing deprecated image: {iso_path.name}\x1b[0m"
                     )
@@ -261,6 +266,49 @@ def _cleanup_old_versions(new_iso: Path) -> None:
                 pass
     except Exception:
         pass
+
+
+def _variant_stem(volume_id: str) -> str:
+    """Extract a stable variant stem from a volume ID by removing version-like tokens.
+
+    Version tokens are segments that start with a digit (e.g. '44', '24.04.4').
+    Architecture tokens like 'x86_64' and 'amd64' are preserved because they start
+    with a letter, even though they contain digits. This distinguishes Fedora KDE
+    from Fedora Sway from Fedora Everything.
+
+    Examples:
+        'Fedora-E-dvd-x86_64-44'         → 'fedora-e-dvd-x86_64'
+        'Fedora-KDE-Live-44'             → 'fedora-kde-live'
+        'Ubuntu-Server 24.04.4 LTS amd64' → 'ubuntu-server lts amd64'
+    """
+    import re as _re
+
+    # Temporarily protect architecture names that contain underscores
+    # (e.g. x86_64) by replacing the underscore with a placeholder
+    protected = volume_id
+    arch_patterns = _re.findall(r"\b(x86_\d+|amd\d+|i\d86|arm\w*)\b", volume_id, _re.I)
+    for arch in arch_patterns:
+        safe_arch = arch.replace("_", "§")
+        protected = protected.replace(arch, safe_arch, 1)
+
+    tokens = _re.split(r"([\s\-]+)", protected)
+    cleaned = []
+    for token in tokens:
+        if _re.match(r"^[\s\-]+$", token):
+            cleaned.append(token)
+            continue
+        # Remove tokens that start with a digit (version numbers)
+        if token and token[0].isdigit():
+            continue
+        cleaned.append(token)
+
+    stem = "".join(cleaned)
+    # Restore architecture underscores
+    stem = stem.replace("§", "_")
+    # Normalize release tier labels (LTS, ESD, etc.) that differ between versions
+    stem = _re.sub(r"\b(lts|esd|point)\b", "", stem, flags=_re.I)
+    stem = _re.sub(r"\s+", " ", stem).strip(" -_")
+    return stem.lower()
 
 
 def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str, str, str, bool, str | None]:
