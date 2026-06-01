@@ -20,6 +20,7 @@ MIRROR_CONNECT_TIMEOUT = 5      # TCP ping timeout (seconds)
 MIRROR_HTTP_TIMEOUT = 10        # HTTP request timeout (seconds)
 PER_DISTRO_TIMEOUT = 30         # Hard deadline per distro scrape (seconds)
 SCRAPE_DEADLINE = 120           # Overall wall-clock limit for all scraping (seconds)
+DEFAULT_STAGING_DIR = Path("/tmp/visync_staging")
 
 
 def ping_mirror(url: str) -> bool:
@@ -311,7 +312,7 @@ def _variant_stem(volume_id: str) -> str:
     return stem.lower()
 
 
-def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str, str, str, bool, str | None]:
+def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool = False) -> tuple[str, str, str, bool, str | None]:
     """Scrape and version-check a single distro. Returns metadata for download decisions."""
     clean_name = settings.get("clean_name", entry_id)
     print(f"\n=== PROCESSING REPOSITORY SYNCHRONIZATION: {clean_name.upper()} ===")
@@ -327,8 +328,8 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str
 
     local_ventoy_files = find_installed_isos(ventoy_root)
 
-    # Exact filename match — already up to date
-    if any(f.name == latest_filename for f in local_ventoy_files):
+    # Exact filename match — already up to date (skip check if --force)
+    if not force and any(f.name == latest_filename for f in local_ventoy_files):
         print(f"[✓] {clean_name} is fully initialized and matches upstream build.")
         return entry_id, clean_name, latest_filename, True, None
 
@@ -338,27 +339,30 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str
         print(f"[!] WARNING: Could not extract version from remote filename '{latest_filename}'. Skipping.")
         return entry_id, clean_name, "", False, None
 
-    local_candidates = [
-        f for f in local_ventoy_files
-        if extract_version_from_filename(f.name)
-    ]
-    if local_candidates:
-        # Pick the local file with the closest name stem (same distro prefix)
-        remote_stem = latest_filename.split("-")[0].lower()
-        same_distro = [
-            f for f in local_candidates
-            if f.name.lower().startswith(remote_stem)
+    if not force:
+        local_candidates = [
+            f for f in local_ventoy_files
+            if extract_version_from_filename(f.name)
         ]
-        best_local = same_distro[0] if same_distro else local_candidates[0]
-        local_version = extract_version_from_filename(best_local.name)
+        if local_candidates:
+            remote_stem = latest_filename.split("-")[0].lower()
+            same_distro = [
+                f for f in local_candidates
+                if f.name.lower().startswith(remote_stem)
+            ]
+            best_local = same_distro[0] if same_distro else local_candidates[0]
+            local_version = extract_version_from_filename(best_local.name)
 
-        comparison = compare_versions(remote_version, local_version)
-        if comparison <= 0:
-            print(
-                f"[✓] {clean_name} local version ({local_version}) is current "
-                f"(upstream: {remote_version}). Skipping download."
-            )
-            return entry_id, clean_name, latest_filename, True, None
+            comparison = compare_versions(remote_version, local_version)
+            if comparison <= 0:
+                print(
+                    f"[✓] {clean_name} local version ({local_version}) is current "
+                    f"(upstream: {remote_version}). Skipping download."
+                )
+                return entry_id, clean_name, latest_filename, True, None
+
+    if force:
+        print(f"[!] --force: Skipping version check for {clean_name}")
 
     return entry_id, clean_name, latest_filename, False, download_url
 
@@ -372,7 +376,7 @@ def _cleanup_part_files(*directories: Path) -> None:
             part_file.unlink(missing_ok=True)
 
 
-def sync_all_configured_distros():
+def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
     """Iterate through user-defined scrapers to pull updates down safely."""
     config = load_config()
     distro_scrapers = config.get("distros", {})
@@ -396,8 +400,8 @@ def sync_all_configured_distros():
 
     # Establish output path limits
     config_download_dir = iso_settings.get("download_dir", "").strip()
-    if use_buffer and config_download_dir:
-        download_target_dir = Path(config_download_dir)
+    if use_buffer:
+        download_target_dir = Path(config_download_dir) if config_download_dir else DEFAULT_STAGING_DIR
         download_target_dir.mkdir(parents=True, exist_ok=True)
         print(f"[*] Buffer Staging Enabled -> {download_target_dir}")
     else:
@@ -411,7 +415,7 @@ def sync_all_configured_distros():
     scrape_start = __import__("time").monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers)) as executor:
         future_map = {
-            executor.submit(_check_distro, entry_id, settings, ventoy_root): entry_id
+            executor.submit(_check_distro, entry_id, settings, ventoy_root, force): entry_id
             for entry_id, settings in distro_scrapers.items()
         }
         for future in concurrent.futures.as_completed(future_map, timeout=SCRAPE_DEADLINE):
@@ -434,15 +438,24 @@ def sync_all_configured_distros():
         executor.shutdown(wait=False, cancel_futures=True)
 
     # Execute downloads sequentially (heavy disk I/O)
-    for download_url, latest_filename in pending_downloads:
-        dest = download_target_dir / latest_filename
-        part_file = dest.with_suffix(dest.suffix + ".part")
-        try:
-            download_iso(download_url, dest)
-        except (TimeoutError, ConnectionResetError, OSError) as e:
-            print(f"[✗] Failed syncing {latest_filename}: {e}")
-            part_file.unlink(missing_ok=True)
-            continue
+    if dry_run:
+        if not pending_downloads:
+            print("[*] Dry run: nothing to download — all ISOs are current.")
+        else:
+            print(f"\n[*] Dry run: would download {len(pending_downloads)} file(s):")
+            for url, filename in pending_downloads:
+                print(f"    -> {filename}")
+                print(f"       {url}")
+    else:
+        for download_url, latest_filename in pending_downloads:
+            dest = download_target_dir / latest_filename
+            part_file = dest.with_suffix(dest.suffix + ".part")
+            try:
+                download_iso(download_url, dest)
+            except (TimeoutError, ConnectionResetError, OSError) as e:
+                print(f"[✗] Failed syncing {latest_filename}: {e}")
+                part_file.unlink(missing_ok=True)
+                continue
 
     return download_target_dir
 
@@ -462,6 +475,8 @@ if __name__ == "__main__":
         _download_dir = _iso_settings.get("download_dir", "").strip()
         if _download_dir:
             _cleanup_targets.append(Path(_download_dir))
+        else:
+            _cleanup_targets.append(DEFAULT_STAGING_DIR)
         _drives = find_ventoy_drives()
         if _drives:
             _cleanup_targets.append(_drives[0])

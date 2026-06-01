@@ -179,11 +179,12 @@ def find_ventoy_drives() -> list[Path]:
             f"Unsupported operating system: {system}\nThis script currently supports Windows, macOS, and Linux.\nTo add support for your OS, please contribute to github.com/hxmbl/visync"
         )
 
-    # Error handling for when multiple Ventoy targets are found
+    # When multiple Ventoy targets are found, warn and default to the first one
     if len(detected_paths) > 1:
-        raise RuntimeError(
-            f"Multiple Ventoy drives detected, this is not supported *yet*: {[str(p) for p in detected_paths]}. \nPlease connect only one."
+        print(
+            f"[!] Multiple Ventoy drives detected. Defaulting to: {detected_paths[0]}"
         )
+        print(f"    Ignored: {[str(p) for p in detected_paths[1:]]}")
 
     return detected_paths
 
@@ -248,8 +249,8 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 
 
 def find_installed_isos(directory: Path) -> list[Path]:
-    """Find all ISO files under the given directory."""
-    return list(directory.rglob("*.iso"))
+    """Find all ISO files under the given directory, ignoring macOS resource forks."""
+    return [p for p in directory.rglob("*.iso") if not p.name.startswith("._")]
 
 
 def find_installed_isos_formatted(directory: Path) -> list[str]:

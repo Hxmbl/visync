@@ -4,8 +4,14 @@ from pathlib import Path
 
 import typer
 
-from src.finder import find_ventoy_drives, load_config
-from src.verify import run_directory_verify
+from src.finder import (
+    find_installed_isos,
+    find_ventoy_drives,
+    get_iso_volume_id,
+    identify_distro,
+    load_config,
+)
+from src.verify import extract_version_from_filename, run_directory_verify
 
 app = typer.Typer()
 
@@ -15,11 +21,17 @@ def sync(
     config: Path = typer.Option(
         "config.toml", "--config", "-c", help="Path to config file"
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be done without doing it"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-download even if version matches"
+    ),
 ) -> None:
     """Sync ISO files to the Ventoy drive."""
     from src.download import sync_all_configured_distros
 
-    sync_all_configured_distros()
+    sync_all_configured_distros(dry_run=dry_run, force=force)
 
 
 @app.command()
@@ -27,9 +39,70 @@ def list(
     config: Path = typer.Option(
         "config.toml", "--config", "-c", help="Path to config file"
     ),
+    drive: Path | None = typer.Option(
+        None,
+        "--drive",
+        "-d",
+        help="Directory to scan (defaults to detected Ventoy drive)",
+    ),
 ) -> None:
-    """List ISOs on the Ventoy drive and available for download."""
-    ...
+    """List ISOs on the Ventoy drive with distro, version, and size."""
+    if drive is not None:
+        iso_dir = drive
+    else:
+        drives = find_ventoy_drives()
+        if not drives:
+            typer.echo("[-] No Ventoy drives detected.", err=True)
+            raise typer.Exit(1)
+        iso_dir = drives[0]
+
+    if not iso_dir.is_dir():
+        typer.echo(f"[-] Not a directory: {iso_dir}", err=True)
+        raise typer.Exit(1)
+
+    iso_paths = find_installed_isos(iso_dir)
+    if not iso_paths:
+        typer.echo("[-] No ISO files found.")
+        return
+
+    # Build table rows
+    rows = []
+    for iso_path in sorted(iso_paths, key=lambda p: p.name):
+        vid = get_iso_volume_id(iso_path)
+        distro = identify_distro(vid, iso_path.name)
+        version = extract_version_from_filename(iso_path.name) or "—"
+        size_gb = iso_path.stat().st_size / (1024**3)
+        rows.append((distro, version, f"{size_gb:.1f}G", iso_path.name))
+
+    # Calculate column widths
+    col_distro = max(len(r[0]) for r in rows)
+    col_version = max(len(r[1]) for r in rows)
+    col_size = max(len(r[2]) for r in rows)
+
+    # Print header
+    header = (
+        f"  {'Distro':<{col_distro}}  "
+        f"{'Version':<{col_version}}  "
+        f"{'Size':<{col_size}}  "
+        f"Filename"
+    )
+    typer.echo(f"\n  {header}")
+    typer.echo(f"  {'─' * col_distro}  {'─' * col_version}  {'─' * col_size}  {'─' * 40}")
+
+    # Print rows
+    for distro, version, size, filename in rows:
+        typer.echo(
+            f"  {distro:<{col_distro}}  "
+            f"{version:<{col_version}}  "
+            f"{size:<{col_size}}  "
+            f"{filename}"
+        )
+
+    total_gb = sum(r[2] for r in rows if r[2].endswith("G"))
+    total_gb_val = sum(
+        iso_path.stat().st_size / (1024**3) for iso_path in iso_paths
+    )
+    typer.echo(f"\n  {len(rows)} ISO(s) — {total_gb_val:.1f} GiB total")
 
 
 @app.command()
