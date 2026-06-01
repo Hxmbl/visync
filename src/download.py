@@ -4,26 +4,14 @@ import concurrent.futures
 import re
 import shutil
 import sys
-import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 # Adjust standard path imports for internal source files
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.finder import find_installed_isos, find_ventoy_drives
-
-
-def load_config(config_path: Path | None = None) -> dict:
-    """Load configuration dictionary maps and distro settings from config.toml."""
-    path = config_path or Path(__file__).parent.parent / "config.toml"
-    try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
-    except Exception as e:
-        print(f"[-] Critical Error: Failed to parse config.toml database: {e}")
-        # TODO: Add a later fallback mechanism to load a default embedded config if the file is missing or malformed
-        return {}
+from src.finder import find_installed_isos, find_ventoy_drives, load_config
+from src.verify import compare_versions, extract_version_from_filename
 
 
 def fetch_html(url: str, allow_insecure: bool = False) -> str:
@@ -208,58 +196,6 @@ def download_iso(url: str, dest_path: Path):
     print("\n[✓] Asset file write sequence complete.")
 
 
-def parse_version(version_str: str) -> tuple | None:
-    """Parse a version string into a comparable tuple.
-
-    Handles semantic versions (e.g. 24.04.1) and date-based versions (e.g. 2026.06.01).
-    Returns a tuple of ints for comparison, or None if parsing fails entirely.
-    """
-    parts = version_str.split(".")
-    try:
-        parsed = tuple(int(p) for p in parts if p.isdigit())
-        return parsed if parsed else None
-    except (ValueError, TypeError):
-        return None
-
-
-def compare_versions(remote: str, local: str) -> int:
-    """Compare two version strings. Returns 1 if remote is newer, -1 if local is newer, 0 if equal.
-
-    Falls back to string comparison with a warning if structured parsing fails.
-    """
-    remote_ver = parse_version(remote)
-    local_ver = parse_version(local)
-
-    if remote_ver is not None and local_ver is not None:
-        if remote_ver > local_ver:
-            return 1
-        elif remote_ver < local_ver:
-            return -1
-        return 0
-
-    # Structured parsing failed — fall back to lexicographic string comparison
-    print(
-        f"    [!] WARNING: Could not parse version strings for comparison "
-        f"(remote='{remote}', local='{local}'). Falling back to string comparison."
-    )
-    if remote > local:
-        return 1
-    elif remote < local:
-        return -1
-    return 0
-
-
-def _extract_version_from_filename(filename: str) -> str:
-    """Extract the version portion from an ISO filename.
-
-    Attempts to pull the version segment (e.g. '24.04.1' from 'ubuntu-24.04.1-live-server-amd64.iso'
-    or '2026.06.01' from 'Fedora-Workstation-Live-x86_64-2026.06.01.iso').
-    Returns the raw version substring or empty string if no numeric version found.
-    """
-    match = re.search(r"(\d+(?:\.\d+)+)", filename)
-    return match.group(1) if match else ""
-
-
 def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str, str, str, bool, str | None]:
     """Scrape and version-check a single distro. Returns metadata for download decisions."""
     clean_name = settings.get("clean_name", entry_id)
@@ -282,14 +218,14 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str
         return entry_id, clean_name, latest_filename, True, None
 
     # Version-based comparison: find best local candidate and compare
-    remote_version = _extract_version_from_filename(latest_filename)
+    remote_version = extract_version_from_filename(latest_filename)
     if not remote_version:
         print(f"[!] WARNING: Could not extract version from remote filename '{latest_filename}'. Skipping.")
         return entry_id, clean_name, "", False, None
 
     local_candidates = [
         f for f in local_ventoy_files
-        if _extract_version_from_filename(f.name)
+        if extract_version_from_filename(f.name)
     ]
     if local_candidates:
         # Pick the local file with the closest name stem (same distro prefix)
@@ -299,7 +235,7 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str
             if f.name.lower().startswith(remote_stem)
         ]
         best_local = same_distro[0] if same_distro else local_candidates[0]
-        local_version = _extract_version_from_filename(best_local.name)
+        local_version = extract_version_from_filename(best_local.name)
 
         comparison = compare_versions(remote_version, local_version)
         if comparison <= 0:

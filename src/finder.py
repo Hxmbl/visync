@@ -8,18 +8,19 @@ What it does:
 - Lists .iso files under a directory and returns their detected names
 """
 
+import tomllib
 from pathlib import Path
 
 
-def _distro_config_path() -> Path:
-    """Resolve config.toml from cwd (runtime) or repo root (development)."""
-    cwd_config = Path.cwd() / "config.toml"
-    if cwd_config.is_file():
-        return cwd_config
-    repo_config = Path(__file__).resolve().parent.parent / "config.toml"
-    if repo_config.is_file():
-        return repo_config
-    return cwd_config
+def load_config(config_path: Path | None = None) -> dict:
+    """Load configuration dictionary maps and distro settings from config.toml."""
+    path = config_path or Path(__file__).parent.parent / "config.toml"
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except Exception as e:
+        print(f"[-] Critical Error: Failed to parse config.toml database: {e}")
+        return {}
 
 
 def _mount_device(dev: str, detected: list[Path]) -> None:
@@ -207,17 +208,11 @@ def identify_distro(volume_id: str, file_name: str) -> str:
     3. Smart filename regex parsing fallback
     """
     import re
-    import tomllib
 
     vol_lower = volume_id.lower().strip()
     file_lower = file_name.lower().strip()
 
-    config_path = _distro_config_path()
-    try:
-        with open(config_path, "rb") as f:
-            config = tomllib.load(f)
-    except Exception:
-        config = {}
+    config = load_config()
 
     # Layer 1 & 2: Match Base Distros and check for Contextual Fork Overrides
     base_distros = config.get("base_distros", {})

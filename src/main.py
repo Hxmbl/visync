@@ -40,7 +40,7 @@ def verify(
     ),
 ) -> None:
     """Verify integrity of ISOs on the Ventoy drive."""
-    # from src.download import load_config
+    # from src.finder import load_config
     # from src.finder import find_ventoy_drives
     # from src.verify import run_directory_verify
 

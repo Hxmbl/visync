@@ -19,6 +19,61 @@ from urllib.request import urlopen
 from src.finder import find_installed_isos, get_iso_volume_id, identify_distro
 
 
+# ── Version comparison utilities ──────────────────────────────────
+
+
+def parse_version(version_str: str) -> tuple | None:
+    """Parse a version string into a comparable tuple.
+
+    Handles semantic versions (e.g. 24.04.1) and date-based versions (e.g. 2026.06.01).
+    Returns a tuple of ints for comparison, or None if parsing fails entirely.
+    """
+    parts = version_str.split(".")
+    try:
+        parsed = tuple(int(p) for p in parts if p.isdigit())
+        return parsed if parsed else None
+    except (ValueError, TypeError):
+        return None
+
+
+def compare_versions(remote: str, local: str) -> int:
+    """Compare two version strings. Returns 1 if remote is newer, -1 if local is newer, 0 if equal.
+
+    Falls back to string comparison with a warning if structured parsing fails.
+    """
+    remote_ver = parse_version(remote)
+    local_ver = parse_version(local)
+
+    if remote_ver is not None and local_ver is not None:
+        if remote_ver > local_ver:
+            return 1
+        elif remote_ver < local_ver:
+            return -1
+        return 0
+
+    # Structured parsing failed — fall back to lexicographic string comparison
+    print(
+        f"    [!] WARNING: Could not parse version strings for comparison "
+        f"(remote='{remote}', local='{local}'). Falling back to string comparison."
+    )
+    if remote > local:
+        return 1
+    elif remote < local:
+        return -1
+    return 0
+
+
+def extract_version_from_filename(filename: str) -> str:
+    """Extract the version portion from an ISO filename.
+
+    Attempts to pull the version segment (e.g. '24.04.1' from 'ubuntu-24.04.1-live-server-amd64.iso'
+    or '2026.06.01' from 'Fedora-Workstation-Live-x86_64-2026.06.01.iso').
+    Returns the raw version substring or empty string if no numeric version found.
+    """
+    match = re.search(r"(\d+(?:\.\d+)+)", filename)
+    return match.group(1) if match else ""
+
+
 HASH_ALGOS = {
     "sha256": hashlib.sha256,
     "sha1": hashlib.sha1,
