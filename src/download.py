@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 # Adjust standard path imports for internal source files
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.finder import find_installed_isos, find_ventoy_drives, load_config
+from src.finder import find_installed_isos, find_ventoy_drives, get_iso_volume_id, identify_distro, load_config
 from src.verify import compare_versions, extract_version_from_filename
 
 # Watchdog constants
@@ -210,6 +210,57 @@ def download_iso(url: str, dest_path: Path):
 
     part_path.rename(dest_path)
     print("\n[✓] Asset file write sequence complete.")
+
+    # Post-download cleanup: remove older versions of the same distribution
+    _cleanup_old_versions(dest_path)
+
+
+def _cleanup_old_versions(new_iso: Path) -> None:
+    """Scan the target directory and delete older ISOs of the same distribution.
+
+    Uses volume ID to match distros regardless of filename changes.
+    Safe to call — deletion failures are logged but never crash the program.
+    """
+    try:
+        new_vid = get_iso_volume_id(new_iso)
+        if not new_vid:
+            return
+        new_distro = identify_distro(new_vid, new_iso.name)
+
+        # Skip unknown or generic matches — don't delete anything we can't positively identify
+        if new_distro in ("Unknown OS", ""):
+            return
+
+        target_dir = new_iso.parent
+        all_isos = find_installed_isos(target_dir)
+
+        for iso_path in all_isos:
+            # Skip the file we just downloaded
+            if iso_path == new_iso:
+                continue
+            # Skip non-ISO files and .part artifacts
+            if iso_path.suffix.lower() != ".iso":
+                continue
+
+            try:
+                old_vid = get_iso_volume_id(iso_path)
+                if not old_vid:
+                    continue
+                old_distro = identify_distro(old_vid, iso_path.name)
+
+                if old_distro == new_distro:
+                    print(
+                        f"\x1b[33m[-] Removing deprecated image: {iso_path.name}\x1b[0m"
+                    )
+                    iso_path.unlink(missing_ok=True)
+            except OSError:
+                print(
+                    f"[!] WARNING: Could not remove stale file: {iso_path.name}"
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _check_distro(entry_id: str, settings: dict, ventoy_root: Path) -> tuple[str, str, str, bool, str | None]:
