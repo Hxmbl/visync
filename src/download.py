@@ -339,10 +339,10 @@ def _variant_stem(volume_id: str) -> str:
         safe_arch = arch.replace("_", "§")
         protected = protected.replace(arch, safe_arch, 1)
 
-    tokens = _re.split(r"([\s\-]+)", protected)
+    tokens = _re.split(r"([\s\-_]+)", protected)
     cleaned = []
     for token in tokens:
-        if _re.match(r"^[\s\-]+$", token):
+        if _re.match(r"^[\s\-_]+$", token):
             cleaned.append(token)
             continue
         # Remove tokens that start with a digit (version numbers)
@@ -422,10 +422,14 @@ def _cleanup_part_files(*directories: Path) -> None:
             part_file.unlink(missing_ok=True)
 
 
-def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
+def sync_all_configured_distros(
+    dry_run: bool = False,
+    force: bool = False,
+    config_path: Path | None = None,
+):
     """Iterate through user-defined scrapers to pull updates down safely."""
     _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force})")
-    config = load_config()
+    config = load_config(config_path)
     distro_scrapers = config.get("distros", {})
     iso_settings = config.get("iso", {})
 
@@ -499,6 +503,15 @@ def sync_all_configured_distros(dry_run: bool = False, force: bool = False):
                 print(f"[✗] Failed syncing {latest_filename}: {e}")
                 part_file.unlink(missing_ok=True)
                 continue
+            if dest.parent != ventoy_root:
+                drive_dest = ventoy_root / latest_filename
+                try:
+                    shutil.copy2(dest, drive_dest)
+                    print(f"[✓] Copied {latest_filename} to Ventoy drive")
+                    _cleanup_old_versions(drive_dest)
+                except OSError as e:
+                    print(f"[✗] Failed copying {latest_filename} to drive: {e}")
+                    continue
 
     return download_target_dir
 

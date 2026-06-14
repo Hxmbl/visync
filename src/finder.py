@@ -303,6 +303,8 @@ def load_all_metadata(drive_root: Path) -> dict[str, dict]:
         return {}
     result = {}
     for meta_file in metadata_dir.glob("*.json"):
+        if meta_file.name.startswith("._"):
+            continue
         filename = meta_file.stem
         data = read_iso_metadata(drive_root, filename)
         if data:

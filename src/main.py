@@ -22,8 +22,8 @@ app = typer.Typer()
 
 @app.command()
 def sync(
-    config: Path = typer.Option(
-        "config.toml", "--config", "-c", help="Path to config file"
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be done without doing it"
@@ -35,13 +35,13 @@ def sync(
     """Sync ISO files to the Ventoy drive."""
     from src.download import sync_all_configured_distros
 
-    sync_all_configured_distros(dry_run=dry_run, force=force)
+    sync_all_configured_distros(dry_run=dry_run, force=force, config_path=config)
 
 
 @app.command()
 def list(
-    config: Path = typer.Option(
-        "config.toml", "--config", "-c", help="Path to config file"
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
     ),
     drive: Path | None = typer.Option(
         None,
@@ -114,8 +114,8 @@ def list(
 
 @app.command()
 def verify(
-    config: Path = typer.Option(
-        "config.toml", "--config", "-c", help="Path to config file"
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
     ),
     drive: Path | None = typer.Option(
         None,
