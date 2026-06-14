@@ -134,9 +134,9 @@ class TestVerifyCommand(unittest.TestCase):
         self.app = app
         self.runner = CliRunner()
 
-    @patch("src.verify.run_directory_verify")
-    @patch("src.finder.find_ventoy_drives")
-    @patch("src.download.load_config")
+    @patch("src.main.run_directory_verify")
+    @patch("src.main.find_ventoy_drives")
+    @patch("src.main.load_config")
     def test_verify_command_success(
         self,
         mock_load: MagicMock,
@@ -153,8 +153,8 @@ class TestVerifyCommand(unittest.TestCase):
         self.assertIn("[✓]", result.stdout)
         self.assertIn("1 verified", result.stdout)
 
-    @patch("src.verify.run_directory_verify")
-    @patch("src.download.load_config")
+    @patch("src.main.run_directory_verify")
+    @patch("src.main.load_config")
     def test_verify_command_fails_on_bad_checksum(
         self, mock_load: MagicMock, mock_run: MagicMock
     ) -> None:
@@ -168,8 +168,8 @@ class TestVerifyCommand(unittest.TestCase):
         output = result.stdout + result.stderr
         self.assertIn("[✗]", output)
 
-    @patch("src.finder.find_ventoy_drives", return_value=[])
-    @patch("src.download.load_config", return_value={})
+    @patch("src.main.find_ventoy_drives", return_value=[])
+    @patch("src.main.load_config", return_value={})
     def test_verify_command_no_ventoy(self, _load: MagicMock, _drives: MagicMock) -> None:
         result = self.runner.invoke(self.app, ["verify"])
         self.assertEqual(result.exit_code, 1)
