@@ -125,7 +125,8 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         versions.sort(key=lambda x: [int(d) for d in x.split(".") if d.isdigit()])
         latest_version = versions[-1]
 
-        iso_dir_url = f"{base_url}{latest_version}/Workstation/x86_64/iso/"
+        variant_path = settings.get("variant_path", "Workstation/x86_64/iso")
+        iso_dir_url = f"{base_url}{latest_version}/{variant_path}/"
         iso_html = fetch_html(iso_dir_url)
         if not iso_html:
             return "", ""

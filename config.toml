@@ -103,3 +103,59 @@ keyword = "archlinuxarm"
 strategy = "direct_match"
 base_url = "https://os.archlinuxarm.org/os/"
 iso_regex = 'href="(ArchLinuxARM-rpi-aarch64-latest\.tar\.gz)"' # Note: ARM targets use rootfs archives or img files
+
+#############################
+###### ADDITIONAL DT #######
+#############################
+
+[distros.FedoraKDE]
+clean_name = "Fedora KDE"
+keyword = "fedora-kde"
+strategy = "fedora_nested"
+variant_path = "KDE/x86_64/iso"
+base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
+version_regex = 'href="([0-9\.]+)/"'
+iso_regex = 'href="(Fedora-KDE-Desktop-Live-x86_64-[0-9\.-]+\.iso)"'
+checksum_url = "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM"
+checksum_format = "gpg_checksum"
+signing_key_url = "https://fedoraproject.org/fedora.gpg"
+
+[distros.UbuntuDesktop]
+clean_name = "Ubuntu Desktop"
+keyword = "desktop"
+strategy = "ubuntu_nested"
+base_url = "https://releases.ubuntu.com/"
+version_regex = 'href="([0-9\.]+)/"'
+iso_regex = 'href="(ubuntu-[0-9\.-]+desktop-amd64\.iso)"'
+checksum_url = "{base_url}{version}/SHA256SUMS"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.ParrotSecurity]
+clean_name = "Parrot Security"
+keyword = "parrot"
+strategy = "ubuntu_nested"
+base_url = "https://deb.parrotsec.org/parrot/iso/"
+version_regex = 'href="([0-9\.]+(?:-[0-9]+)?)/"'
+iso_regex = 'href="(Parrot-security-[0-9\.]+_amd64\.iso)"'
+checksum_url = "{base_url}{version}/signed-hashes.txt"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.Omarchy]
+clean_name = "Omarchy"
+keyword = "omarchy"
+strategy = "direct_match"
+base_url = "https://iso.omarchy.org/"
+iso_regex = '(omarchy-[0-9\.]+\.iso)'
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+# Pop!_OS — ISO listing at https://iso.pop-os.org/ returns 403, so no dynamic scraper yet.
+# The build revision in the URL path increments per release and can't be discovered without
+# directory listing or an API. Manual URL construction required.
+# Example: https://iso.pop-os.org/24.04/amd64/generic/{rev}/pop-os_24.04_amd64_generic_{rev}.iso
+# [distros.PopOS]
+# clean_name = "Pop!_OS"
+# keyword = "pop"
+# strategy = "direct_match"
