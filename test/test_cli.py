@@ -522,10 +522,11 @@ class TestShortFlags(unittest.TestCase):
             self.assertIn("--dry-run", opts)
             self.assertIn("-n", opts, f"{cmd} missing -n")
 
-    def test_f_contextual(self) -> None:
+    def test_short_flags_contextual(self) -> None:
         """install uses -i for --file, update/sync use -f for --force."""
         install_opts = self._get_options("install")
         self.assertIn("-i", install_opts)
+        self.assertNotIn("-f,", install_opts, "install should not have -f")
         for cmd in ["update", "sync"]:
             opts = self._get_options(cmd)
             self.assertIn("-f", opts, f"{cmd} missing -f")
