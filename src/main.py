@@ -1,4 +1,4 @@
-"""Visync - Ventoy ISO Synchronization Tool.
+"""Visync - Ventoy Package Manager.
 
 Built with typer. Run `visync --help` for available commands.
 """
@@ -15,31 +15,273 @@ from src.finder import (
     load_config,
     load_all_metadata,
 )
-from src.output import console, error, header, info, iso_table, success, warn
+from src.output import console, error, header, info as output_info, iso_table, success, warn
 from src.verify import extract_version_from_filename, run_directory_verify
 
 app = typer.Typer()
 
 
+def _get_drive(drive: Path | None = None) -> Path:
+    """Resolve the Ventoy drive path."""
+    if drive is not None:
+        return drive
+    drives = find_ventoy_drives()
+    if not drives:
+        error("No Ventoy drives detected.")
+        raise typer.Exit(1)
+    return drives[0]
+
+
 @app.command()
-def sync(
+def install(
+    name: str = typer.Argument(help="Distro name or keyword to install"),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
     ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", "-n", help="Show what would be done without doing it"
-    ),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Force re-download even if version matches"
-    ),
-    clean: bool = typer.Option(
-        False, "--clean", help="Remove old versions of the same distro (dry-run by default)"
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
     ),
 ) -> None:
-    """Sync ISO files to the Ventoy drive."""
+    """Download and install a distro to the Ventoy drive."""
     from src.download import sync_all_configured_distros
+    from src.pm import mark_installed, resolve_distro
 
-    sync_all_configured_distros(dry_run=dry_run, force=force, clean=clean, config_path=config)
+    config_data = load_config(config)
+    ventoy_root = _get_drive(drive)
+
+    entry_id = resolve_distro(name, config_data)
+    if not entry_id:
+        error(f"Unknown distro: '{name}'")
+        output_info("Run 'visync search' to see available distros.")
+        raise typer.Exit(1)
+
+    distro_config = config_data.get("distros", {}).get(entry_id, {})
+    clean_name = distro_config.get("clean_name", entry_id)
+
+    # Check if already on drive
+    existing = find_installed_isos(ventoy_root)
+    for iso_path in existing:
+        vid = get_iso_volume_id(iso_path)
+        if vid:
+            distro = identify_distro(vid, iso_path.name)
+        else:
+            distro = identify_distro("", iso_path.name)
+        if distro.lower() == clean_name.lower():
+            warn(f"{clean_name} is already on the drive: {iso_path.name}")
+            mark_installed(ventoy_root, entry_id)
+            return
+
+    output_info(f"Installing {clean_name}...")
+    # Sync just this one distro
+    sync_all_configured_distros(
+        force=True,
+        config_path=config,
+        only=[entry_id],
+        drive_override=ventoy_root,
+    )
+    mark_installed(ventoy_root, entry_id)
+    success(f"{clean_name} installed")
+
+
+@app.command()
+def remove(
+    name: str = typer.Argument(help="Distro name or keyword to remove"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
+    ),
+) -> None:
+    """Remove a distro from the Ventoy drive."""
+    from src.finder import remove_iso_metadata
+    from src.pm import mark_removed, resolve_distro
+
+    config_data = load_config(config)
+    ventoy_root = _get_drive(drive)
+
+    entry_id = resolve_distro(name, config_data)
+    if not entry_id:
+        error(f"Unknown distro: '{name}'")
+        raise typer.Exit(1)
+
+    distro_config = config_data.get("distros", {}).get(entry_id, {})
+    clean_name = distro_config.get("clean_name", entry_id)
+
+    # Find matching files on drive
+    existing = find_installed_isos(ventoy_root)
+    removed_count = 0
+    for iso_path in existing:
+        vid = get_iso_volume_id(iso_path)
+        if vid:
+            distro = identify_distro(vid, iso_path.name)
+        else:
+            distro = identify_distro("", iso_path.name)
+        if distro.lower() == clean_name.lower():
+            try:
+                iso_path.unlink(missing_ok=True)
+                remove_iso_metadata(ventoy_root, iso_path.name)
+                success(f"Removed {iso_path.name}")
+                removed_count += 1
+            except OSError as e:
+                error(f"Could not remove {iso_path.name}: {e}")
+
+    if removed_count == 0:
+        warn(f"No files found for {clean_name} on the drive.")
+    else:
+        mark_removed(ventoy_root, entry_id)
+        success(f"{clean_name} removed")
+
+
+@app.command()
+def update(
+    name: str | None = typer.Argument(default=None, help="Distro to update (all if omitted)"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-download"
+    ),
+    clean: bool = typer.Option(
+        False, "--clean", help="Remove old versions"
+    ),
+) -> None:
+    """Update installed distros to latest versions."""
+    from src.download import sync_all_configured_distros
+    from src.pm import get_installed_ids, resolve_distro
+
+    config_data = load_config(config)
+    ventoy_root = _get_drive(drive)
+
+    if name:
+        entry_id = resolve_distro(name, config_data)
+        if not entry_id:
+            error(f"Unknown distro: '{name}'")
+            raise typer.Exit(1)
+        only = [entry_id]
+    else:
+        only = get_installed_ids(ventoy_root)
+        if not only:
+            output_info("No distros installed. Use 'visync install <name>' first.")
+            return
+
+    sync_all_configured_distros(
+        force=force,
+        clean=clean,
+        config_path=config,
+        only=only,
+        drive_override=ventoy_root,
+    )
+
+
+@app.command()
+def search(
+    query: str | None = typer.Argument(default=None, help="Search query (lists all if omitted)"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
+    ),
+) -> None:
+    """Search available distros."""
+    from src.pm import get_installed_ids, resolve_distro
+
+    config_data = load_config(config)
+    distros = config_data.get("distros", {})
+
+    if not distros:
+        warn("No distros configured.")
+        return
+
+    ventoy_root = _get_drive(drive)
+    installed = set(get_installed_ids(ventoy_root))
+
+    if query:
+        entry_id = resolve_distro(query, config_data)
+        if entry_id:
+            s = distros[entry_id]
+            status = "installed" if entry_id in installed else "available"
+            console.print(f"  {s.get('clean_name', entry_id)} ({entry_id}) [{status}]")
+            console.print(f"    strategy: {s.get('strategy', '?')}")
+            if s.get("base_url"):
+                console.print(f"    url: {s['base_url']}")
+        else:
+            error(f"No match for '{query}'")
+        return
+
+    rows = []
+    for entry_id, s in sorted(distros.items()):
+        clean = s.get("clean_name", entry_id)
+        strategy = s.get("strategy", "?")
+        status = "+" if entry_id in installed else " "
+        rows.append((status, clean, strategy))
+
+    console.print()
+    console.print("  [bold]Available distros:[/bold]")
+    for status, name, strategy in rows:
+        marker = f"[green]{status}[/green]" if status == "+" else f"[dim]{status}[/dim]"
+        console.print(f"    {marker} {name} [dim]({strategy})[/dim]")
+    console.print()
+    console.print("  [dim]+ = installed[/dim]")
+
+
+@app.command()
+def info(
+    name: str = typer.Argument(help="Distro name or keyword"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
+    ),
+) -> None:
+    """Show details about a distro."""
+    from src.pm import get_installed_ids, resolve_distro
+
+    config_data = load_config(config)
+    distros = config_data.get("distros", {})
+
+    entry_id = resolve_distro(name, config_data)
+    if not entry_id:
+        error(f"Unknown distro: '{name}'")
+        raise typer.Exit(1)
+
+    s = distros[entry_id]
+    ventoy_root = _get_drive(drive)
+    installed = set(get_installed_ids(ventoy_root))
+
+    console.print()
+    console.print(f"  [bold]{s.get('clean_name', entry_id)}[/bold]")
+    console.print(f"    entry_id:  {entry_id}")
+    console.print(f"    strategy:  {s.get('strategy', '?')}")
+    if s.get("base_url"):
+        console.print(f"    base_url:  {s['base_url']}")
+    if s.get("api_url"):
+        console.print(f"    api_url:   {s['api_url']}")
+    console.print(f"    checksums: {s.get('checksum_format', 'none')}")
+    status = "[green]installed[/green]" if entry_id in installed else "[dim]available[/dim]"
+    console.print(f"    status:    {status}")
+
+    # Check if file exists on drive
+    existing = find_installed_isos(ventoy_root)
+    clean_name = s.get("clean_name", entry_id)
+    for iso_path in existing:
+        vid = get_iso_volume_id(iso_path)
+        if vid:
+            distro = identify_distro(vid, iso_path.name)
+        else:
+            distro = identify_distro("", iso_path.name)
+        if distro.lower() == clean_name.lower():
+            size_gb = iso_path.stat().st_size / (1024**3)
+            console.print(f"    file:      {iso_path.name} ({size_gb:.1f}G)")
+            break
+    else:
+        console.print("    file:      [dim]not on drive[/dim]")
+    console.print()
 
 
 @app.command()
@@ -55,6 +297,8 @@ def list(
     ),
 ) -> None:
     """List ISOs on the Ventoy drive with distro, version, and size."""
+    from src.pm import get_installed_ids
+
     if drive is not None:
         iso_dir = drive
     else:
@@ -95,6 +339,47 @@ def list(
 
 
 @app.command()
+def sync(
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be done without doing it"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-download even if version matches"
+    ),
+    clean: bool = typer.Option(
+        False, "--clean", help="Remove old versions of the same distro (dry-run by default)"
+    ),
+    all: bool = typer.Option(
+        False, "--all", "-a", help="Sync all configured distros (not just installed)"
+    ),
+) -> None:
+    """Sync installed distros to the Ventoy drive."""
+    from src.download import sync_all_configured_distros
+    from src.pm import get_installed_ids
+
+    drive_root = _get_drive()
+
+    if all:
+        only = None  # None = sync everything
+    else:
+        only = get_installed_ids(drive_root)
+        if not only:
+            output_info("No distros installed. Use 'visync install <name>' or 'visync sync --all'.")
+            return
+
+    sync_all_configured_distros(
+        dry_run=dry_run,
+        force=force,
+        clean=clean,
+        config_path=config,
+        only=only,
+    )
+
+
+@app.command()
 def verify(
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
@@ -121,7 +406,7 @@ def verify(
         error(f"Not a directory: {iso_dir}")
         raise typer.Exit(1)
 
-    info(f"Verifying ISOs in {iso_dir} ...")
+    output_info(f"Verifying ISOs in {iso_dir} ...")
     results = run_directory_verify(iso_dir, config_data)
 
     if not results:
@@ -138,11 +423,11 @@ def verify(
             error(f"{label} — checksum mismatch or fetch failed")
             failed += 1
         else:
-            info(f"{label} — no checksum config")
+            output_info(f"{label} — no checksum config")
             skipped += 1
 
     console.print()
-    info(f"Done: {verified} verified, {failed} failed, {skipped} skipped (no config).")
+    output_info(f"Done: {verified} verified, {failed} failed, {skipped} skipped (no config).")
     if failed:
         raise typer.Exit(1)
 

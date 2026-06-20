@@ -557,9 +557,15 @@ def sync_all_configured_distros(
     force: bool = False,
     clean: bool = False,
     config_path: Path | None = None,
+    only: list[str] | None = None,
+    drive_override: Path | None = None,
 ):
-    """Iterate through user-defined scrapers to pull updates down safely."""
-    _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force}, clean={clean})")
+    """Iterate through user-defined scrapers to pull updates down safely.
+
+    If *only* is provided, only sync those entry_ids.
+    If *drive_override* is provided, use that as the Ventoy root.
+    """
+    _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force}, clean={clean}, only={only})")
     config = load_config(config_path)
     distro_scrapers = config.get("distros", {})
     iso_settings = config.get("iso", {})
@@ -570,11 +576,14 @@ def sync_all_configured_distros(
 
     use_buffer = "--no-buffer" not in sys.argv
 
-    drives = find_ventoy_drives()
-    if not drives:
-        error("No Ventoy drives found.")
-        return
-    ventoy_root = drives[0]
+    if drive_override:
+        ventoy_root = drive_override
+    else:
+        drives = find_ventoy_drives()
+        if not drives:
+            error("No Ventoy drives found.")
+            return
+        ventoy_root = drives[0]
 
     visync_watchdog(ventoy_root)
     _sweep_old_versions(ventoy_root, clean=clean)
@@ -590,6 +599,13 @@ def sync_all_configured_distros(
 
     pending_downloads: list[tuple[str, str]] = []
     scrape_start = __import__("time").monotonic()
+
+    if only:
+        distro_scrapers = {k: v for k, v in distro_scrapers.items() if k in only}
+        if not distro_scrapers:
+            warn("None of the specified distros are configured.")
+            return
+
     spin_start("Syncing ISOs...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers)) as executor:
         future_map = {
