@@ -42,7 +42,7 @@ def install(
         None, "--drive", "-d", help="Ventoy drive path"
     ),
     file: Path | None = typer.Option(
-        None, "--file", "-f", help="File with one distro name per line"
+        None, "--file", "-i", help="File with one distro name per line"
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be installed without downloading"

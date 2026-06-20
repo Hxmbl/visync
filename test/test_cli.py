@@ -104,7 +104,7 @@ class TestInstall(unittest.TestCase):
     def test_install_file_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(
-                app, ["install", "-f", "/nonexistent/packages.txt", "--drive", tmpdir]
+                app, ["install", "-i", "/nonexistent/packages.txt", "--drive", tmpdir]
             )
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("File not found", result.stdout)
@@ -116,7 +116,7 @@ class TestInstall(unittest.TestCase):
             pkg_file.write_text("# comment\n\narchlinux\n\n# another comment\n")
             with patch("src.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
-                    app, ["install", "-f", str(pkg_file), "--drive", tmpdir, "--dry-run"]
+                    app, ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"]
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 1 distro(s)", result.stdout)
@@ -128,7 +128,7 @@ class TestInstall(unittest.TestCase):
             pkg_file.write_text("archlinux\nubuntuserver\n")
             with patch("src.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
-                    app, ["install", "-f", str(pkg_file), "--drive", tmpdir, "--dry-run"]
+                    app, ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"]
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 2 distro(s)", result.stdout)
@@ -140,7 +140,7 @@ class TestInstall(unittest.TestCase):
             pkg_file.write_text("bogus1\nbogus2\n")
             with patch("src.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
-                    app, ["install", "-f", str(pkg_file), "--drive", tmpdir]
+                    app, ["install", "-i", str(pkg_file), "--drive", tmpdir]
                 )
                 self.assertNotEqual(result.exit_code, 0)
                 self.assertIn("No valid distros", result.stdout)
@@ -523,9 +523,9 @@ class TestShortFlags(unittest.TestCase):
             self.assertIn("-n", opts, f"{cmd} missing -n")
 
     def test_f_contextual(self) -> None:
-        """install uses -f for --file, update/sync use -f for --force."""
+        """install uses -i for --file, update/sync use -f for --force."""
         install_opts = self._get_options("install")
-        self.assertIn("-f", install_opts)
+        self.assertIn("-i", install_opts)
         for cmd in ["update", "sync"]:
             opts = self._get_options(cmd)
             self.assertIn("-f", opts, f"{cmd} missing -f")

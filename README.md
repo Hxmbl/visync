@@ -24,7 +24,7 @@ visync install archlinux
 visync install nixos-graphical
 
 # Batch install from file
-visync install -f packages.txt
+visync install -i packages.txt
 
 # Update all installed distros
 visync update
@@ -54,7 +54,7 @@ visync verify
 |---|---|
 | `visync search [query]` | List available distros (filter by query) |
 | `visync install <name>` | Download and register a distro |
-| `visync install -f <file>` | Batch install from file (one name per line) |
+| `visync install -i <file>` | Batch install from file (one name per line) |
 | `visync remove <name>` | Delete from drive and unregister |
 | `visync update [name]` | Update installed distros (all if no name given) |
 | `visync sync` | Sync installed distros to latest |
@@ -81,7 +81,7 @@ ubuntu-server
 Then run:
 
 ```bash
-visync install -f packages.txt
+visync install -i packages.txt
 ```
 
 Blank lines and lines starting with `#` are ignored.
