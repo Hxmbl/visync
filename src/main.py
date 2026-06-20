@@ -285,6 +285,68 @@ def info(
 
 
 @app.command()
+def autodetect(
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
+    ),
+) -> None:
+    """Auto-detect ISOs on the drive and mark them as installed."""
+    from src.pm import mark_installed, resolve_distro
+
+    config_data = load_config(config)
+    ventoy_root = _get_drive(drive)
+    distros = config_data.get("distros", {})
+
+    existing = find_installed_isos(ventoy_root)
+    found = 0
+    for iso_path in existing:
+        vid = get_iso_volume_id(iso_path)
+        if vid:
+            distro = identify_distro(vid, iso_path.name)
+        else:
+            distro = identify_distro("", iso_path.name)
+        if distro in ("Unknown OS", ""):
+            continue
+
+        # Find matching config entry — prefer exact clean_name match, then keyword in filename
+        entry_id = None
+        file_lower = iso_path.name.lower()
+        for eid, s in distros.items():
+            clean = s.get("clean_name", "")
+            if clean.lower() == distro.lower():
+                entry_id = eid
+                break
+        if not entry_id:
+            # Fallback: check if any config keyword appears in the filename
+            for eid, s in distros.items():
+                keyword = s.get("keyword", "")
+                if keyword and keyword.lower() in file_lower:
+                    entry_id = eid
+                    break
+        if not entry_id:
+            continue
+
+        # Check if already marked
+        from src.pm import get_installed_ids
+        installed = set(get_installed_ids(ventoy_root))
+        if entry_id in installed:
+            continue
+
+        version = extract_version_from_filename(iso_path.name) or ""
+        mark_installed(ventoy_root, entry_id, version=version)
+        success(f"Detected {distro}: {iso_path.name}")
+        found += 1
+
+    if found == 0:
+        output_info("No new distros detected (all already registered).")
+    else:
+        success(f"Marked {found} distro(s) as installed.")
+
+
+@app.command()
 def list(
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
