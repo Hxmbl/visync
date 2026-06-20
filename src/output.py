@@ -1,9 +1,6 @@
 """Rich-based output formatting for visync."""
 
-from pathlib import Path
-
 from rich.console import Console
-from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -11,14 +8,37 @@ from rich.progress import (
     TextColumn,
     TransferSpeedColumn,
 )
+from rich.status import Status
 from rich.table import Table
-from rich.text import Text
 
 console = Console()
 
+_status: Status | None = None
+
+
+def spin_start(msg: str) -> None:
+    """Start a global spinner at the bottom of the console."""
+    global _status
+    _status = Status(msg, spinner="dots", console=console)
+    _status.start()
+
+
+def spin_update(msg: str) -> None:
+    """Update the global spinner message."""
+    if _status:
+        _status.update(msg)
+
+
+def spin_stop() -> None:
+    """Stop the global spinner."""
+    global _status
+    if _status:
+        _status.stop()
+        _status = None
+
 
 def header(text: str) -> None:
-    console.print(Panel(text, style="bold cyan", expand=False))
+    console.print(f"\n[bold]{text}[/bold]\n")
 
 
 def success(msg: str) -> None:
@@ -39,12 +59,6 @@ def error(msg: str) -> None:
 
 def removed(msg: str) -> None:
     console.print(f"  [yellow]–[/yellow] {msg}")
-
-
-def section(title: str) -> None:
-    console.print()
-    console.rule(f"[bold]{title}[/bold]", style="cyan")
-    console.print()
 
 
 def iso_table(rows: list[tuple[str, str, str, str]], total_gb: float) -> None:
@@ -78,7 +92,3 @@ def make_download_progress() -> Progress:
         TransferSpeedColumn(),
         console=console,
     )
-
-
-def copy_progress(filename: str) -> None:
-    console.print(f"  [cyan]⟳[/cyan] Copying {filename} to drive...")

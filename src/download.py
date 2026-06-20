@@ -30,7 +30,9 @@ from src.output import (
     info,
     make_download_progress,
     removed,
-    section,
+    spin_start,
+    spin_stop,
+    spin_update,
     success,
     warn,
 )
@@ -305,6 +307,40 @@ def _cleanup_old_versions(new_iso: Path) -> None:
         pass
 
 
+def _sweep_old_versions(drive_root: Path) -> None:
+    """Scan all ISOs on the drive and remove older versions of the same distro+variant.
+
+    Groups ISOs by (distro, variant_stem), sorts each group by version, and
+    removes all but the newest in each group.
+    """
+    from collections import defaultdict
+
+    _debug("Running sweep for stale ISOs")
+    all_isos = find_installed_isos(drive_root)
+    groups: dict[tuple[str, str], list[tuple[str, Path]]] = defaultdict(list)
+
+    for iso_path in all_isos:
+        vid = get_iso_volume_id(iso_path)
+        distro = identify_distro(vid, iso_path.name) if vid else ""
+        stem = _variant_stem(vid) if vid else ""
+        version = extract_version_from_filename(iso_path.name) or "0"
+        if distro and distro != "Unknown OS":
+            groups[(distro, stem)].append((version, iso_path))
+
+    for (distro, _stem), versions in groups.items():
+        if len(versions) <= 1:
+            continue
+        versions.sort(key=lambda x: [int(d) for d in x[0].split(".") if d.isdigit()])
+        newest_version, newest_path = versions[-1]
+        for version, iso_path in versions[:-1]:
+            try:
+                removed(f"Removing old {distro} {version}: {iso_path.name}")
+                iso_path.unlink(missing_ok=True)
+                remove_iso_metadata(drive_root, iso_path.name)
+            except OSError as e:
+                warn(f"Could not remove {iso_path.name}: {e}")
+
+
 def _variant_stem(volume_id: str) -> str:
     """Extract a stable variant stem from a volume ID by removing version-like tokens.
 
@@ -350,26 +386,24 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
     """Scrape and version-check a single distro. Returns metadata for download decisions."""
     clean_name = settings.get("clean_name", entry_id)
     _debug(f"Checking {clean_name} (force={force})")
-    section(clean_name.upper())
+    spin_update(clean_name)
 
     latest_filename, download_url = process_scraping_strategy(clean_name, settings)
     if not latest_filename:
-        warn(f"Unable to determine remote file properties for {clean_name}. Skipping.")
+        warn(f"{clean_name} — unable to reach mirror")
         return entry_id, clean_name, "", False, None
-
-    info(f"Latest: {latest_filename}")
 
     local_ventoy_files = find_installed_isos(ventoy_root)
 
     # Exact filename match — already up to date (skip check if --force)
     if not force and any(f.name == latest_filename for f in local_ventoy_files):
-        success(f"{clean_name} is up to date.")
+        success(f"{clean_name} is up to date")
         return entry_id, clean_name, latest_filename, True, None
 
     # Version-based comparison: find best local candidate and compare
     remote_version = extract_version_from_filename(latest_filename)
     if not remote_version:
-        warn(f"Could not extract version from '{latest_filename}'. Skipping.")
+        warn(f"{clean_name} — could not parse version from '{latest_filename}'")
         return entry_id, clean_name, "", False, None
 
     if not force:
@@ -389,13 +423,12 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
             comparison = compare_versions(remote_version, local_version)
             if comparison <= 0:
                 success(
-                    f"{clean_name} local version ({local_version}) is current "
-                    f"(upstream: {remote_version})"
+                    f"{clean_name} is up to date (local {local_version}, upstream {remote_version})"
                 )
                 return entry_id, clean_name, latest_filename, True, None
 
     if force:
-        warn(f"--force: skipping version check for {clean_name}")
+        warn(f"{clean_name} — force re-download")
 
     return entry_id, clean_name, latest_filename, False, download_url
 
@@ -433,6 +466,7 @@ def sync_all_configured_distros(
     ventoy_root = drives[0]
 
     visync_watchdog(ventoy_root)
+    _sweep_old_versions(ventoy_root)
 
     config_download_dir = iso_settings.get("download_dir", "").strip()
     if use_buffer:
@@ -445,6 +479,7 @@ def sync_all_configured_distros(
 
     pending_downloads: list[tuple[str, str]] = []
     scrape_start = __import__("time").monotonic()
+    spin_start("Syncing ISOs...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers)) as executor:
         future_map = {
             executor.submit(_check_distro, entry_id, settings, ventoy_root, force): entry_id
@@ -453,30 +488,29 @@ def sync_all_configured_distros(
         for future in concurrent.futures.as_completed(future_map, timeout=SCRAPE_DEADLINE):
             elapsed = __import__("time").monotonic() - scrape_start
             if elapsed > SCRAPE_DEADLINE:
-                warn(f"Scrape deadline ({SCRAPE_DEADLINE}s) exceeded. Aborting.")
                 break
             try:
                 entry_id, clean_name, latest_filename, up_to_date, download_url = future.result(timeout=PER_DISTRO_TIMEOUT)
             except concurrent.futures.TimeoutError:
-                error(f"{future_map[future]} scrape timed out ({PER_DISTRO_TIMEOUT}s). Skipping.")
+                error(f"{future_map[future]} timed out")
                 continue
             except (TimeoutError, ConnectionResetError, OSError) as e:
-                error(f"Failed syncing {future_map[future]}: {e}")
+                error(f"{future_map[future]}: {e}")
                 continue
             if up_to_date or not download_url:
                 continue
             pending_downloads.append((download_url, latest_filename))
         executor.shutdown(wait=False, cancel_futures=True)
+    spin_stop()
 
     if dry_run:
         if not pending_downloads:
-            info("Dry run: nothing to download — all ISOs are current.")
+            info("All ISOs are current — nothing to download.")
         else:
             console.print()
-            info(f"Dry run: would download {len(pending_downloads)} file(s):")
+            info(f"Would download {len(pending_downloads)} file(s):")
             for url, filename in pending_downloads:
                 console.print(f"    [cyan]→[/cyan] {filename}")
-                console.print(f"      [dim]{url}[/dim]")
     else:
         for download_url, latest_filename in pending_downloads:
             dest = download_target_dir / latest_filename
