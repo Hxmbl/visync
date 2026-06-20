@@ -71,6 +71,8 @@ def resolve_distro(query: str, config: dict) -> str | None:
     Returns the entry_id if found, None otherwise.
     """
     query_lower = query.lower().strip()
+    if not query_lower:
+        return None
     distros = config.get("distros", {})
 
     # Exact match on entry_id

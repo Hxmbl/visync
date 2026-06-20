@@ -72,15 +72,28 @@ def install(
             return
 
     output_info(f"Installing {clean_name}...")
-    # Sync just this one distro
+    # Sync just this one distro — direct to drive (no staging)
     sync_all_configured_distros(
         force=True,
         config_path=config,
         only=[entry_id],
         drive_override=ventoy_root,
+        use_buffer=False,
     )
-    mark_installed(ventoy_root, entry_id)
-    success(f"{clean_name} installed")
+    # Only mark installed if the file is now on the drive
+    existing = find_installed_isos(ventoy_root)
+    for iso_path in existing:
+        vid = get_iso_volume_id(iso_path)
+        if vid:
+            distro = identify_distro(vid, iso_path.name)
+        else:
+            distro = identify_distro("", iso_path.name)
+        if distro.lower() == clean_name.lower():
+            version = extract_version_from_filename(iso_path.name) or ""
+            mark_installed(ventoy_root, entry_id, version=version)
+            success(f"{clean_name} installed")
+            return
+    warn(f"{clean_name} install completed but file not found on drive")
 
 
 @app.command()
