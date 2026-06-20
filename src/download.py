@@ -108,7 +108,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     iso_regex = settings.get("iso_regex")
 
     # Pre-flight connectivity check — skip dead mirrors instantly
-    if not ping_mirror(base_url):
+    if base_url and not ping_mirror(base_url):
         warn(f"Mirror unreachable (ping failed): {base_url}")
         return "", ""
 
@@ -163,6 +163,65 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         match = re.search(iso_regex, iso_html)
         if match:
             return match.group(1), f"{iso_dir_url}{match.group(1)}"
+
+    # Strategy D: NixOS channel page — parse version, construct ISO URL
+    elif strategy == "nixos_channel":
+        html = fetch_html(base_url)
+        if not html:
+            return "", ""
+
+        # The channel page contains text like "nixos-26.05 release nixos-26.05.1947.a0374025a863"
+        version_match = re.search(r"nixos-[\d\.]+\s+release\s+(nixos-[\d\.]+\.[a-f0-9]+)", html)
+        if not version_match:
+            warn(f"{name} — could not parse NixOS version from channel page")
+            return "", ""
+
+        full_version = version_match.group(1)  # e.g. "nixos-26.05.1947.a0374025a863"
+        # Strip the "nixos-" prefix for constructing URLs
+        version_id = full_version.replace("nixos-", "", 1)  # e.g. "26.05.1947.a0374025a863"
+        # Extract the short version (e.g. "26.05") from the full version
+        short_version_match = re.search(r"nixos-([\d]+\.[\d]+)", full_version)
+        if not short_version_match:
+            return "", ""
+        short_version = short_version_match.group(1)  # e.g. "26.05"
+
+        iso_filename = f"nixos-minimal-{version_id}-x86_64-linux.iso"
+        iso_url = f"https://releases.nixos.org/nixos/{short_version}/{full_version}/{iso_filename}"
+
+        # Verify the URL is reachable
+        try:
+            req = urllib.request.Request(iso_url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT) as resp:
+                if resp.status == 200:
+                    return iso_filename, iso_url
+        except Exception:
+            pass
+
+        return "", ""
+
+    # Strategy E: Pop!_OS JSON API — fetch latest build info
+    elif strategy == "popos_api":
+        import json as _json
+
+        api_url = settings.get("api_url", "https://api.pop-os.org/builds")
+        variant = settings.get("variant", "generic")
+        release = settings.get("release", "24.04")
+
+        url = f"{api_url}/{release}/{variant}"
+        html = fetch_html(url)
+        if not html:
+            return "", ""
+
+        try:
+            data = _json.loads(html)
+            iso_url = data.get("url", "")
+            if iso_url:
+                iso_filename = iso_url.rsplit("/", 1)[-1]
+                return iso_filename, iso_url
+        except (_json.JSONDecodeError, KeyError):
+            warn(f"{name} — could not parse Pop!_OS API response")
+
+        return "", ""
 
     return "", ""
 

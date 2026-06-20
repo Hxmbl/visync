@@ -37,6 +37,7 @@ hiren = "Hiren's BootCD"
 kodachi = "Linux Kodachi"
 nixos = "NixOS"
 parrot = "Parrot Security"
+pop = "Pop!_OS"
 systemrescue = "SystemRescue"
 rescuezilla = "Rescuezilla"
 tiny11 = "Tiny11"
@@ -142,6 +143,15 @@ checksum_url = "{base_url}{version}/signed-hashes.txt"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
+[distros.NixOS]
+clean_name = "NixOS"
+keyword = "nixos"
+strategy = "nixos_channel"
+base_url = "https://channels.nixos.org/nixos-26.05"
+checksum_url = "https://channels.nixos.org/nixos-26.05/latest-nixos-minimal-x86_64-linux.iso.sha256"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
 [distros.Omarchy]
 clean_name = "Omarchy"
 keyword = "omarchy"
@@ -151,11 +161,12 @@ iso_regex = '(omarchy-[0-9\.]+\.iso)'
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
-# Pop!_OS — ISO listing at https://iso.pop-os.org/ returns 403, so no dynamic scraper yet.
-# The build revision in the URL path increments per release and can't be discovered without
-# directory listing or an API. Manual URL construction required.
-# Example: https://iso.pop-os.org/24.04/amd64/generic/{rev}/pop-os_24.04_amd64_generic_{rev}.iso
-# [distros.PopOS]
-# clean_name = "Pop!_OS"
-# keyword = "pop"
-# strategy = "direct_match"
+[distros.PopOS]
+clean_name = "Pop!_OS"
+keyword = "pop"
+strategy = "popos_api"
+api_url = "https://api.pop-os.org/builds"
+variant = "generic"
+release = "24.04"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
