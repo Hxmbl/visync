@@ -212,6 +212,12 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 
     config = load_config()
 
+    # Check standalone matches first — they're more specific than base distros
+    standalone_matches = config.get("standalone_matches", {})
+    for keyword, clean_name in standalone_matches.items():
+        if keyword in vol_lower or keyword in file_lower:
+            return clean_name
+
     base_distros = config.get("base_distros", {})
     fork_overrides = config.get("fork_overrides", {})
 
@@ -222,11 +228,6 @@ def identify_distro(volume_id: str, file_name: str) -> str:
                 if parent == base_key and keyword in file_lower:
                     return clean_name
             return base_name
-
-    standalone_matches = config.get("standalone_matches", {})
-    for keyword, clean_name in standalone_matches.items():
-        if keyword in vol_lower or keyword in file_lower:
-            return clean_name
 
     if not file_lower.endswith(".iso"):
         return "Unknown OS"
