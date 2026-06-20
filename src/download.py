@@ -409,11 +409,12 @@ def _cleanup_old_versions(new_iso: Path) -> None:
         pass
 
 
-def _sweep_old_versions(drive_root: Path) -> None:
+def _sweep_old_versions(drive_root: Path, clean: bool = False) -> None:
     """Scan all ISOs on the drive and remove older versions of the same distro+variant.
 
     Groups ISOs by (distro, variant_stem), sorts each group by version, and
     removes all but the newest in each group.
+    With clean=False (default), only reports what would be deleted.
     """
     from collections import defaultdict
 
@@ -439,12 +440,15 @@ def _sweep_old_versions(drive_root: Path) -> None:
         versions.sort(key=lambda x: [int(d) for d in x[0].split(".") if d.isdigit()])
         newest_version, newest_path = versions[-1]
         for version, iso_path in versions[:-1]:
-            try:
-                removed(f"Removing old {distro} {version}: {iso_path.name}")
-                iso_path.unlink(missing_ok=True)
-                remove_iso_metadata(drive_root, iso_path.name)
-            except OSError as e:
-                warn(f"Could not remove {iso_path.name}: {e}")
+            if clean:
+                try:
+                    removed(f"Removing old {distro} {version}: {iso_path.name}")
+                    iso_path.unlink(missing_ok=True)
+                    remove_iso_metadata(drive_root, iso_path.name)
+                except OSError as e:
+                    warn(f"Could not remove {iso_path.name}: {e}")
+            else:
+                info(f"Would remove old {distro} {version}: {iso_path.name}")
 
 
 def _variant_stem(volume_id: str) -> str:
@@ -551,10 +555,11 @@ def _cleanup_part_files(*directories: Path) -> None:
 def sync_all_configured_distros(
     dry_run: bool = False,
     force: bool = False,
+    clean: bool = False,
     config_path: Path | None = None,
 ):
     """Iterate through user-defined scrapers to pull updates down safely."""
-    _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force})")
+    _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force}, clean={clean})")
     config = load_config(config_path)
     distro_scrapers = config.get("distros", {})
     iso_settings = config.get("iso", {})
@@ -572,7 +577,7 @@ def sync_all_configured_distros(
     ventoy_root = drives[0]
 
     visync_watchdog(ventoy_root)
-    _sweep_old_versions(ventoy_root)
+    _sweep_old_versions(ventoy_root, clean=clean)
 
     config_download_dir = iso_settings.get("download_dir", "").strip()
     if use_buffer:

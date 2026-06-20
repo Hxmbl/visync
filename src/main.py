@@ -32,11 +32,14 @@ def sync(
     force: bool = typer.Option(
         False, "--force", "-f", help="Force re-download even if version matches"
     ),
+    clean: bool = typer.Option(
+        False, "--clean", help="Remove old versions of the same distro (dry-run by default)"
+    ),
 ) -> None:
     """Sync ISO files to the Ventoy drive."""
     from src.download import sync_all_configured_distros
 
-    sync_all_configured_distros(dry_run=dry_run, force=force, config_path=config)
+    sync_all_configured_distros(dry_run=dry_run, force=force, clean=clean, config_path=config)
 
 
 @app.command()
