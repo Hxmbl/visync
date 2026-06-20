@@ -292,6 +292,7 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> b
         pass
 
     CHUNK_SIZE = 128000
+    READ_TIMEOUT = 30  # seconds per chunk before considering stalled
     part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
     try:
@@ -307,7 +308,12 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> b
                 )
                 with open(part_path, "wb", buffering=1048576) as f:
                     while True:
-                        chunk = resp.read(CHUNK_SIZE)
+                        try:
+                            chunk = resp.read(CHUNK_SIZE)
+                        except socket.timeout:
+                            error(f"Download stalled — no data for {READ_TIMEOUT}s")
+                            part_path.unlink(missing_ok=True)
+                            return False
                         if not chunk:
                             break
                         f.write(chunk)
@@ -319,6 +325,20 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> b
         return False
     except Exception as e:
         error(f"Network error during download: {e}")
+        part_path.unlink(missing_ok=True)
+        return False
+
+    # Verify file is not empty or obviously truncated
+    if part_path.stat().st_size == 0:
+        error(f"Download produced empty file: {dest_path.name}")
+        part_path.unlink(missing_ok=True)
+        return False
+
+    if total > 0 and part_path.stat().st_size < total:
+        error(
+            f"Download truncated — got {part_path.stat().st_size / (1024**3):.2f} GiB "
+            f"of expected {total / (1024**3):.2f} GiB"
+        )
         part_path.unlink(missing_ok=True)
         return False
 
@@ -659,10 +679,19 @@ def sync_all_configured_distros(
                 drive_dest = ventoy_root / latest_filename
                 try:
                     shutil.copy2(dest, drive_dest)
+                    # Verify the copy is the same size as the source
+                    if drive_dest.stat().st_size != dest.stat().st_size:
+                        error(
+                            f"Copy verification failed for {latest_filename} — "
+                            f"source {dest.stat().st_size}, dest {drive_dest.stat().st_size}"
+                        )
+                        drive_dest.unlink(missing_ok=True)
+                        continue
                     success(f"Copied {latest_filename} to Ventoy drive")
                     _cleanup_old_versions(drive_dest)
                 except OSError as e:
                     error(f"Failed copying {latest_filename} to drive: {e}")
+                    drive_dest.unlink(missing_ok=True)
                     continue
 
     return download_target_dir

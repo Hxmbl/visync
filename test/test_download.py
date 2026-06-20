@@ -404,8 +404,8 @@ class TestDownloadIso(unittest.TestCase):
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
         _section("download_iso: Successful Download")
-        head_resp = self._mock_head_response()
-        get_resp = self._mock_get_response(b"x" * 500)
+        head_resp = self._mock_head_response(content_length="500")
+        get_resp = self._mock_get_response(b"x" * 500, content_length="500")
         mock_urlopen.side_effect = [head_resp, get_resp]
 
         with tempfile.TemporaryDirectory() as tmpdir:
