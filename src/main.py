@@ -500,6 +500,9 @@ def sync(
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
     ),
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be done without doing it"
     ),
@@ -517,7 +520,7 @@ def sync(
     from src.download import sync_all_configured_distros
     from src.pm import get_installed_ids
 
-    drive_root = _get_drive()
+    drive_root = _get_drive(drive)
 
     if all:
         only = None  # None = sync everything
@@ -533,6 +536,7 @@ def sync(
         clean=clean,
         config_path=config,
         only=only,
+        drive_override=drive_root,
     )
 
 
