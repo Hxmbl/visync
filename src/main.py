@@ -594,6 +594,50 @@ def verify(
 
 
 @app.command()
+def nuke_metadata(
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+    drive: Path | None = typer.Option(
+        None, "--drive", "-d", help="Ventoy drive path"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be deleted without deleting"
+    ),
+) -> None:
+    """Delete all ISO metadata from .visync/metadata/.
+
+    Keeps installed.json and other state. Metadata rebuilds on next sync.
+    """
+    import shutil
+
+    ventoy_root = _get_drive(drive)
+    metadata_dir = ventoy_root / ".visync" / "metadata"
+
+    if not metadata_dir.is_dir():
+        output_info("No metadata directory found.")
+        return
+
+    files = [f for f in metadata_dir.iterdir()]
+    json_files = [f for f in files if f.is_file() and f.suffix == ".json"]
+    total_size = sum(f.stat().st_size for f in json_files)
+
+    if not json_files:
+        output_info("Metadata directory is empty.")
+        return
+
+    if dry_run:
+        output_info(f"Would delete {len(json_files)} metadata file(s) ({total_size / 1024:.1f} KiB):")
+        for f in sorted(json_files):
+            console.print(f"    [cyan]→[/cyan] {f.name}")
+        return
+
+    shutil.rmtree(metadata_dir)
+    success(f"Deleted {len(json_files)} metadata file(s) ({total_size / 1024:.1f} KiB)")
+    output_info("Metadata will rebuild on next sync.")
+
+
+@app.command()
 def version() -> None:
     """Show the version of Visync."""
     from . import __version__

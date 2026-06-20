@@ -442,6 +442,59 @@ class TestVerify(unittest.TestCase):
         self.assertNotIn("--dry-run", result.stdout)
 
 
+# ── nuke-metadata ───────────────────────────────────────────────────────────
+
+
+class TestNukeMetadata(unittest.TestCase):
+    def test_nuke_metadata_no_dir(self) -> None:
+        """nuke-metadata on drive with no .visync/metadata shows message."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("No metadata directory found", result.stdout)
+
+    def test_nuke_metadata_empty_dir(self) -> None:
+        """nuke-metadata on empty metadata dir shows message."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir) / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("Metadata directory is empty", result.stdout)
+
+    def test_nuke_metadata_dry_run(self) -> None:
+        """nuke-metadata --dry-run shows files without deleting."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir) / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            (meta_dir / "arch.iso.json").write_text("{}")
+            (meta_dir / "ubuntu.iso.json").write_text("{}")
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir, "--dry-run"])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("Would delete", result.stdout)
+            self.assertTrue((meta_dir / "arch.iso.json").exists())
+            self.assertTrue((meta_dir / "ubuntu.iso.json").exists())
+
+    def test_nuke_metadata_deletes(self) -> None:
+        """nuke-metadata deletes metadata files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir) / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            (meta_dir / "arch.iso.json").write_text("{}")
+            (meta_dir / "ubuntu.iso.json").write_text("{}")
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("Deleted 2 metadata", result.stdout)
+            self.assertFalse(meta_dir.exists())
+
+    def test_nuke_metadata_has_flags(self) -> None:
+        """nuke-metadata accepts --config, --drive, --dry-run."""
+        result = runner.invoke(app, ["nuke-metadata", "--help"])
+        self.assertIn("--config", result.stdout)
+        self.assertIn("--drive", result.stdout)
+        self.assertIn("--dry-run", result.stdout)
+
+
 # ── version ──────────────────────────────────────────────────────────────────
 
 
