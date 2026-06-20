@@ -522,14 +522,16 @@ class TestShortFlags(unittest.TestCase):
             self.assertIn("--dry-run", opts)
             self.assertIn("-n", opts, f"{cmd} missing -n")
 
-    def test_short_flags_contextual(self) -> None:
-        """install uses -i for --file, update/sync use -f for --force."""
-        install_opts = self._get_options("install")
-        self.assertIn("-i", install_opts)
-        self.assertNotIn("-f,", install_opts, "install should not have -f")
+    def test_i_is_file_on_install(self) -> None:
+        opts = self._get_options("install")
+        self.assertIn("--file", opts)
+        self.assertIn("-i", opts, "install missing -i for --file")
+
+    def test_f_is_force_on_update_sync(self) -> None:
         for cmd in ["update", "sync"]:
             opts = self._get_options(cmd)
-            self.assertIn("-f", opts, f"{cmd} missing -f")
+            self.assertIn("--force", opts)
+            self.assertIn("-f", opts, f"{cmd} missing -f for --force")
 
 
 if __name__ == "__main__":
