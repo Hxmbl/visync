@@ -463,6 +463,79 @@ class TestDownloadIso(unittest.TestCase):
             self.assertFalse(dest.exists())
             _ok("Download skipped when disk space insufficient")
 
+    @patch("src.verify.verify_from_config")
+    @patch("src.download.urllib.request.urlopen")
+    @patch("src.download.urllib.request.Request")
+    def test_download_auto_verify_success(
+        self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
+    ):
+        _section("download_iso: Auto-Verify Checksum Success")
+        head_resp = self._mock_head_response("500")
+        get_resp = self._mock_get_response(b"x" * 500, content_length="500")
+        mock_urlopen.side_effect = [head_resp, get_resp]
+        mock_verify.return_value = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "test.iso"
+            distro_cfg = {"checksum_url": "https://example.com/SHA256SUMS"}
+            checksums_cfg = {"enabled": True}
+            result = download_iso(
+                "https://example.com/test.iso", dest,
+                distro_config=distro_cfg, checksums_config=checksums_cfg,
+            )
+            self.assertTrue(result)
+            self.assertTrue(dest.exists())
+            mock_verify.assert_called_once()
+            _ok("Checksum verified after download")
+
+    @patch("src.verify.verify_from_config")
+    @patch("src.download.urllib.request.urlopen")
+    @patch("src.download.urllib.request.Request")
+    def test_download_auto_verify_failure_deletes(
+        self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
+    ):
+        _section("download_iso: Auto-Verify Checksum Failure")
+        head_resp = self._mock_head_response("500")
+        get_resp = self._mock_get_response(b"x" * 500, content_length="500")
+        mock_urlopen.side_effect = [head_resp, get_resp]
+        mock_verify.return_value = False
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "test.iso"
+            distro_cfg = {"checksum_url": "https://example.com/SHA256SUMS"}
+            checksums_cfg = {"enabled": True}
+            result = download_iso(
+                "https://example.com/test.iso", dest,
+                distro_config=distro_cfg, checksums_config=checksums_cfg,
+            )
+            self.assertFalse(result)
+            self.assertFalse(dest.exists())
+            _ok("File deleted after checksum failure")
+
+    @patch("src.verify.verify_from_config")
+    @patch("src.download.urllib.request.urlopen")
+    @patch("src.download.urllib.request.Request")
+    def test_download_no_checksum_config_skips(
+        self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
+    ):
+        _section("download_iso: No Checksum Config Skips Verify")
+        head_resp = self._mock_head_response("500")
+        get_resp = self._mock_get_response(b"x" * 500, content_length="500")
+        mock_urlopen.side_effect = [head_resp, get_resp]
+        mock_verify.return_value = None  # No config available
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "test.iso"
+            distro_cfg = {}
+            checksums_cfg = {"enabled": True}
+            result = download_iso(
+                "https://example.com/test.iso", dest,
+                distro_config=distro_cfg, checksums_config=checksums_cfg,
+            )
+            self.assertTrue(result)
+            self.assertTrue(dest.exists())
+            _ok("Download succeeds when no checksum config")
+
 
 class TestCheckDistro(unittest.TestCase):
     @patch("src.download.find_installed_isos")

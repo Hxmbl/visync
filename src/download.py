@@ -261,7 +261,13 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     return "", ""
 
 
-def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> bool:
+def download_iso(
+    url: str,
+    dest_path: Path,
+    drive_root: Path | None = None,
+    distro_config: dict | None = None,
+    checksums_config: dict | None = None,
+) -> bool:
     """Download an ISO file with streaming progress and optional metadata persistence.
 
     Returns True on success, False on failure.
@@ -344,6 +350,19 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> b
 
     part_path.rename(dest_path)
     success(f"Downloaded {dest_path.name}")
+
+    # Auto-verify checksum if config is available
+    if distro_config and checksums_config is not None:
+        from src.verify import verify_from_config
+        result = verify_from_config(dest_path, "", distro_config, checksums_config)
+        if result is False:
+            error(f"Checksum verification failed for {dest_path.name} — deleting")
+            dest_path.unlink(missing_ok=True)
+            return False
+        elif result is True:
+            success(f"Checksum verified: {dest_path.name}")
+        else:
+            warn(f"No checksum config for {dest_path.name} — skipping verification")
 
     sha256_hex = ""
     if drive_root:
@@ -650,9 +669,11 @@ def sync_all_configured_distros(
                 continue
             if up_to_date or not download_url:
                 continue
-            pending_downloads.append((download_url, latest_filename))
+            pending_downloads.append((download_url, latest_filename, entry_id))
         executor.shutdown(wait=False, cancel_futures=True)
     spin_stop()
+
+    checksums_config = config.get("checksums", {})
 
     if dry_run:
         if not pending_downloads:
@@ -660,14 +681,20 @@ def sync_all_configured_distros(
         else:
             console.print()
             info(f"Would download {len(pending_downloads)} file(s):")
-            for url, filename in pending_downloads:
+            for url, filename, _ in pending_downloads:
                 console.print(f"    [cyan]→[/cyan] {filename}")
     else:
-        for download_url, latest_filename in pending_downloads:
+        for download_url, latest_filename, entry_id in pending_downloads:
             dest = download_target_dir / latest_filename
             part_file = dest.with_suffix(dest.suffix + ".part")
+            distro_cfg = distro_scrapers.get(entry_id, {})
             try:
-                ok = download_iso(download_url, dest, drive_root=ventoy_root)
+                ok = download_iso(
+                    download_url, dest,
+                    drive_root=ventoy_root,
+                    distro_config=distro_cfg,
+                    checksums_config=checksums_config,
+                )
             except (TimeoutError, ConnectionResetError, OSError) as e:
                 error(f"Failed syncing {latest_filename}: {e}")
                 part_file.unlink(missing_ok=True)
