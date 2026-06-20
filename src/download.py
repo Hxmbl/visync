@@ -363,15 +363,19 @@ def _cleanup_old_versions(new_iso: Path) -> None:
 
     Uses volume ID to match distros, and extracts a variant stem to avoid
     deleting different flavors (e.g. Fedora KDE vs Fedora Sway).
+    Falls back to filename-based matching for .img files (no ISO 9660 header).
     Safe to call — deletion failures are logged but never crash the program.
     """
     _debug(f"Cleanup check for {new_iso.name}")
     try:
         new_vid = get_iso_volume_id(new_iso)
-        if not new_vid:
-            return
-        new_distro = identify_distro(new_vid, new_iso.name)
-        new_stem = _variant_stem(new_vid)
+        if new_vid:
+            new_distro = identify_distro(new_vid, new_iso.name)
+            new_stem = _variant_stem(new_vid)
+        else:
+            # Filename-based fallback for .img files or unreadable ISOs
+            new_distro = identify_distro("", new_iso.name)
+            new_stem = new_iso.name.rsplit("-", 1)[0].lower() if "-" in new_iso.name else ""
 
         # Skip unknown or generic matches — don't delete anything we can't positively identify
         if new_distro in ("Unknown OS", ""):
@@ -386,10 +390,12 @@ def _cleanup_old_versions(new_iso: Path) -> None:
 
             try:
                 old_vid = get_iso_volume_id(iso_path)
-                if not old_vid:
-                    continue
-                old_distro = identify_distro(old_vid, iso_path.name)
-                old_stem = _variant_stem(old_vid)
+                if old_vid:
+                    old_distro = identify_distro(old_vid, iso_path.name)
+                    old_stem = _variant_stem(old_vid)
+                else:
+                    old_distro = identify_distro("", iso_path.name)
+                    old_stem = iso_path.name.rsplit("-", 1)[0].lower() if "-" in iso_path.name else ""
 
                 if old_distro == new_distro and old_stem == new_stem:
                     removed(f"Removing deprecated image: {iso_path.name}")
@@ -417,8 +423,12 @@ def _sweep_old_versions(drive_root: Path) -> None:
 
     for iso_path in all_isos:
         vid = get_iso_volume_id(iso_path)
-        distro = identify_distro(vid, iso_path.name) if vid else ""
-        stem = _variant_stem(vid) if vid else ""
+        if vid:
+            distro = identify_distro(vid, iso_path.name)
+            stem = _variant_stem(vid)
+        else:
+            distro = identify_distro("", iso_path.name)
+            stem = iso_path.name.rsplit("-", 1)[0].lower() if "-" in iso_path.name else ""
         version = extract_version_from_filename(iso_path.name) or "0"
         if distro and distro != "Unknown OS":
             groups[(distro, stem)].append((version, iso_path))
