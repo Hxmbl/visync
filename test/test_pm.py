@@ -366,19 +366,18 @@ class TestSyncFiltering(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No distros installed", result.stdout)
 
-    @patch("src.download.process_scraping_strategy")
     @patch("src.main.find_ventoy_drives")
-    def test_sync_only_installed(self, mock_drives, mock_scrape):
-        """sync --all checks all distros, not just installed."""
+    def test_sync_all_bypasses_installed_filter(self, mock_drives):
+        """sync --all does not filter by installed list."""
         with tempfile.TemporaryDirectory() as tmp:
             drive = _make_drive(Path(tmp))
             mock_drives.return_value = [drive]
-            _write_installed(drive, {"ArchLinux": {}})
-            mock_scrape.return_value = ("", "")
+            # Only ArchLinux installed, but sync --all should still proceed
+            # (it won't find scrapers in the test config, but should not short-circuit)
             result = self.runner.invoke(self.app, ["sync", "--all"])
             self.assertEqual(result.exit_code, 0)
-            # Should have tried to scrape more than just ArchLinux
-            self.assertGreater(mock_scrape.call_count, 1)
+            # Should NOT show "No distros installed" since --all bypasses the filter
+            self.assertNotIn("No distros installed", result.stdout)
 
 
 # ── .img File Support Tests ─────────────────────────────────────

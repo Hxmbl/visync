@@ -34,73 +34,120 @@ def _get_drive(drive: Path | None = None) -> Path:
 
 @app.command()
 def install(
-    name: str = typer.Argument(help="Distro name or keyword to install"),
+    name: str | None = typer.Argument(default=None, help="Distro name or keyword to install"),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
     ),
     drive: Path | None = typer.Option(
         None, "--drive", "-d", help="Ventoy drive path"
     ),
+    file: Path | None = typer.Option(
+        None, "--file", "-f", help="File with one distro name per line"
+    ),
 ) -> None:
-    """Download and install a distro to the Ventoy drive."""
+    """Download and install distros to the Ventoy drive.
+
+    Use a distro name directly, or pass a file with one name per line.
+    """
     from src.download import sync_all_configured_distros
     from src.pm import mark_installed, resolve_distro
 
     config_data = load_config(config)
     ventoy_root = _get_drive(drive)
 
-    entry_id = resolve_distro(name, config_data)
-    if not entry_id:
-        error(f"Unknown distro: '{name}'")
-        output_info("Run 'visync search' to see available distros.")
+    # Build list of distros to install
+    names: list[str] = []
+    if file:
+        if not file.exists():
+            error(f"File not found: {file}")
+            raise typer.Exit(1)
+        names = [
+            line.strip()
+            for line in file.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+    elif name:
+        names = [name]
+    else:
+        error("Provide a distro name or --file")
         raise typer.Exit(1)
 
-    distro_config = config_data.get("distros", {}).get(entry_id, {})
-    clean_name = distro_config.get("clean_name", entry_id)
+    # Resolve all names first
+    to_install: list[tuple[str, str]] = []  # (entry_id, clean_name)
+    for n in names:
+        entry_id = resolve_distro(n, config_data)
+        if not entry_id:
+            error(f"Unknown distro: '{n}'")
+            continue
+        distro_config = config_data.get("distros", {}).get(entry_id, {})
+        clean_name = distro_config.get("clean_name", entry_id)
+        to_install.append((entry_id, clean_name))
 
-    # Check if already on drive
-    existing = find_installed_isos(ventoy_root)
-    for iso_path in existing:
-        vid = get_iso_volume_id(iso_path)
-        if vid:
-            distro = identify_distro(vid, iso_path.name)
-        else:
-            distro = identify_distro("", iso_path.name)
-        if distro.lower() == clean_name.lower():
-            warn(f"{clean_name} is already on the drive: {iso_path.name}")
-            mark_installed(ventoy_root, entry_id)
-            return
+    if not to_install:
+        error("No valid distros to install.")
+        raise typer.Exit(1)
 
-    output_info(f"Installing {clean_name}...")
-    # Try staging first (faster, less drive wear), fall back to direct if staging too small
+    # Check staging space once
     import shutil as _shutil
     staging_dir = Path.home() / ".cache" / "visync" / "staging"
     try:
         usage = _shutil.disk_usage(staging_dir.parent)
-        use_buffer = usage.free > 512 * 1024 * 1024  # Need at least 512MB for staging
+        use_buffer = usage.free > 512 * 1024 * 1024
     except Exception:
         use_buffer = False
+
+    existing = find_installed_isos(ventoy_root)
+    already_on_drive: list[str] = []
+    to_download: list[str] = []
+
+    for entry_id, clean_name in to_install:
+        found = False
+        for iso_path in existing:
+            vid = get_iso_volume_id(iso_path)
+            if vid:
+                distro = identify_distro(vid, iso_path.name)
+            else:
+                distro = identify_distro("", iso_path.name)
+            if distro.lower() == clean_name.lower():
+                warn(f"{clean_name} is already on the drive: {iso_path.name}")
+                mark_installed(ventoy_root, entry_id)
+                already_on_drive.append(entry_id)
+                found = True
+                break
+        if not found:
+            to_download.append(entry_id)
+
+    if not to_download:
+        output_info("All distros already on drive.")
+        return
+
+    output_info(f"Installing {len(to_download)} distro(s)...")
     sync_all_configured_distros(
         force=True,
         config_path=config,
-        only=[entry_id],
+        only=to_download,
         drive_override=ventoy_root,
         use_buffer=use_buffer,
     )
-    # Only mark installed if the file is now on the drive
-    existing = find_installed_isos(ventoy_root)
-    for iso_path in existing:
-        vid = get_iso_volume_id(iso_path)
-        if vid:
-            distro = identify_distro(vid, iso_path.name)
+
+    # Mark installed if file is now on drive
+    for entry_id in to_download:
+        distro_config = config_data.get("distros", {}).get(entry_id, {})
+        clean_name = distro_config.get("clean_name", entry_id)
+        fresh = find_installed_isos(ventoy_root)
+        for iso_path in fresh:
+            vid = get_iso_volume_id(iso_path)
+            if vid:
+                distro = identify_distro(vid, iso_path.name)
+            else:
+                distro = identify_distro("", iso_path.name)
+            if distro.lower() == clean_name.lower():
+                version = extract_version_from_filename(iso_path.name) or ""
+                mark_installed(ventoy_root, entry_id, version=version)
+                success(f"{clean_name} installed")
+                break
         else:
-            distro = identify_distro("", iso_path.name)
-        if distro.lower() == clean_name.lower():
-            version = extract_version_from_filename(iso_path.name) or ""
-            mark_installed(ventoy_root, entry_id, version=version)
-            success(f"{clean_name} installed")
-            return
-    warn(f"{clean_name} install completed but file not found on drive")
+            warn(f"{clean_name} — file not found on drive after download")
 
 
 @app.command()
