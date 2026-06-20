@@ -144,14 +144,16 @@ class TestVerifyCommand(unittest.TestCase):
         mock_run: MagicMock,
     ) -> None:
         mock_load.return_value = {"checksums": {"enabled": True}, "distros": {}}
-        mock_drives.return_value = [Path("/Volumes/Ventoy")]
-        mock_run.return_value = [(Path("/Volumes/Ventoy/arch.iso"), "Arch Linux", True)]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_drive = Path(tmpdir)
+            mock_drives.return_value = [fake_drive]
+            mock_run.return_value = [(fake_drive / "arch.iso", "Arch Linux", True)]
 
-        result = self.runner.invoke(self.app, ["verify"])
+            result = self.runner.invoke(self.app, ["verify"])
 
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("[✓]", result.stdout)
-        self.assertIn("1 verified", result.stdout)
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("[✓]", result.stdout)
+            self.assertIn("1 verified", result.stdout)
 
     @patch("src.main.run_directory_verify")
     @patch("src.main.load_config")

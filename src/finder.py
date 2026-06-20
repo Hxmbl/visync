@@ -14,9 +14,20 @@ from pathlib import Path
 
 def load_config(config_path: Path | None = None) -> dict:
     """Load configuration dictionary maps and distro settings from config.toml."""
-    path = config_path or Path(__file__).parent.parent / "config.toml"
+    if config_path is None:
+        cwd = Path.cwd()
+        for candidate in [
+            cwd / "config.toml",
+            cwd.parent / "config.toml",
+            Path(__file__).parent.parent / "config.toml",
+        ]:
+            if candidate.is_file():
+                config_path = candidate
+                break
+        else:
+            config_path = cwd / "config.toml"
     try:
-        with open(path, "rb") as f:
+        with open(config_path, "rb") as f:
             return tomllib.load(f)
     except Exception as e:
         print(f"[-] Critical Error: Failed to parse config.toml database: {e}")

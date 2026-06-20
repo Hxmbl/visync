@@ -172,7 +172,7 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> N
     try:
         usage = shutil.disk_usage(dest_path.parent)
         available = usage.free
-        req = urllib.request.Request(url, method="HEAD")
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             expected = int(resp.headers.get("Content-Length", 0))
         if expected > 0:
@@ -204,7 +204,7 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> N
     part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
     try:
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
