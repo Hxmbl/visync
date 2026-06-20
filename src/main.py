@@ -44,6 +44,9 @@ def install(
     file: Path | None = typer.Option(
         None, "--file", "-f", help="File with one distro name per line"
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be installed without downloading"
+    ),
 ) -> None:
     """Download and install distros to the Ventoy drive.
 
@@ -121,6 +124,13 @@ def install(
         output_info("All distros already on drive.")
         return
 
+    if dry_run:
+        output_info(f"Would download {len(to_download)} distro(s):")
+        for entry_id in to_download:
+            distro_config = config_data.get("distros", {}).get(entry_id, {})
+            console.print(f"    [cyan]→[/cyan] {distro_config.get('clean_name', entry_id)}")
+        return
+
     output_info(f"Installing {len(to_download)} distro(s)...")
     sync_all_configured_distros(
         force=True,
@@ -159,6 +169,9 @@ def remove(
     drive: Path | None = typer.Option(
         None, "--drive", "-d", help="Ventoy drive path"
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be removed without deleting"
+    ),
 ) -> None:
     """Remove a distro from the Ventoy drive."""
     from src.finder import remove_iso_metadata
@@ -185,17 +198,21 @@ def remove(
         else:
             distro = identify_distro("", iso_path.name)
         if distro.lower() == clean_name.lower():
-            try:
-                iso_path.unlink(missing_ok=True)
-                remove_iso_metadata(ventoy_root, iso_path.name)
-                success(f"Removed {iso_path.name}")
+            if dry_run:
+                output_info(f"Would remove {iso_path.name}")
                 removed_count += 1
-            except OSError as e:
-                error(f"Could not remove {iso_path.name}: {e}")
+            else:
+                try:
+                    iso_path.unlink(missing_ok=True)
+                    remove_iso_metadata(ventoy_root, iso_path.name)
+                    success(f"Removed {iso_path.name}")
+                    removed_count += 1
+                except OSError as e:
+                    error(f"Could not remove {iso_path.name}: {e}")
 
     if removed_count == 0:
         warn(f"No files found for {clean_name} on the drive.")
-    else:
+    elif not dry_run:
         mark_removed(ventoy_root, entry_id)
         success(f"{clean_name} removed")
 
@@ -214,6 +231,9 @@ def update(
     ),
     clean: bool = typer.Option(
         False, "--clean", help="Remove old versions"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be updated without downloading"
     ),
 ) -> None:
     """Update installed distros to latest versions."""
@@ -236,6 +256,7 @@ def update(
             return
 
     sync_all_configured_distros(
+        dry_run=dry_run,
         force=force,
         clean=clean,
         config_path=config,
@@ -359,6 +380,9 @@ def autodetect(
     drive: Path | None = typer.Option(
         None, "--drive", "-d", help="Ventoy drive path"
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be detected without registering"
+    ),
 ) -> None:
     """Auto-detect ISOs on the drive and mark them as installed."""
     from src.pm import mark_installed, resolve_distro
@@ -403,14 +427,18 @@ def autodetect(
             continue
 
         version = extract_version_from_filename(iso_path.name) or ""
-        mark_installed(ventoy_root, entry_id, version=version)
-        success(f"Detected {distro}: {iso_path.name}")
-        found += 1
+        if dry_run:
+            output_info(f"Would detect {distro}: {iso_path.name}")
+            found += 1
+        else:
+            mark_installed(ventoy_root, entry_id, version=version)
+            success(f"Detected {distro}: {iso_path.name}")
+            found += 1
 
     if found == 0:
         output_info("No new distros detected (all already registered).")
     else:
-        success(f"Marked {found} distro(s) as installed.")
+        success(f"{'Would detect' if dry_run else 'Marked'} {found} distro(s) as installed.")
 
 
 @app.command()
