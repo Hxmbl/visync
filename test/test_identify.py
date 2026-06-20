@@ -49,7 +49,8 @@ class TestIdentifyDistro(unittest.TestCase):
     def test_standalone_match(self) -> None:
         _section("Layer 3: Standalone Match Rules")
         cases = [
-            ("NIXOS_24", "nixos.iso", "NixOS"),
+            ("NIXOS_24", "nixos.iso", "NixOS Minimal"),
+            ("", "nixos-graphical-26.05.iso", "NixOS Graphical"),
             ("", "systemrescue-amd64.iso", "SystemRescue"),
         ]
         for vid, fname, expected in cases:

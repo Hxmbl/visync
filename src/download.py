@@ -185,7 +185,8 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
             return "", ""
         short_version = short_version_match.group(1)  # e.g. "26.05"
 
-        iso_filename = f"nixos-minimal-{version_id}-x86_64-linux.iso"
+        variant = settings.get("variant", "minimal")  # "minimal" or "graphical"
+        iso_filename = f"nixos-{variant}-{version_id}-x86_64-linux.iso"
         iso_url = f"https://releases.nixos.org/nixos/{short_version}/{full_version}/{iso_filename}"
 
         # Verify the URL is reachable
