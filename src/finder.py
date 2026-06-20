@@ -53,6 +53,28 @@ def _mount_device(dev: str, detected: list[Path]) -> None:
         pass
 
 
+def _udisksctl_mount(dev: str) -> Path | None:
+    """Mount a block device using udisksctl (no root required on most setups)."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["udisksctl", "mount", "-b", dev],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            # Output: "Mounted /dev/sdX1 at /run/media/$USER/Ventoy"
+            for line in result.stdout.strip().splitlines():
+                if "at " in line:
+                    mount_point = line.split("at ", 1)[-1].strip().rstrip(".")
+                    return Path(mount_point)
+    except FileNotFoundError:
+        pass  # udisksctl not installed
+    except Exception:
+        pass
+    return None
+
+
 def _try_mount_ventoy(partition: dict, detected: list[Path]) -> None:
     """When Ventoy data partition is unmounted, find the dm-exposed device and mount it."""
     for child in partition.get("children", []):
@@ -67,6 +89,12 @@ def _try_mount_ventoy(partition: dict, detected: list[Path]) -> None:
             dev_path = f"/dev/mapper/{child_name}"
         else:
             dev_path = f"/dev/{child_name}"
+        # Try udisksctl first (no root required)
+        mount_point = _udisksctl_mount(dev_path)
+        if mount_point:
+            detected.append(mount_point)
+            return
+        # Fallback to manual mount
         _mount_device(dev_path, detected)
         if detected:
             return
@@ -122,7 +150,11 @@ def find_ventoy_drives() -> list[Path]:
                     if mnt_proc.returncode == 0 and mnt_proc.stdout.strip():
                         detected_paths.append(Path(mnt_proc.stdout.strip()))
                     elif lbl == "Ventoy":
-                        _mount_device(dev, detected_paths)
+                        mount_point = _udisksctl_mount(dev)
+                        if mount_point:
+                            detected_paths.append(mount_point)
+                        else:
+                            _mount_device(dev, detected_paths)
                 except Exception:
                     continue
 
