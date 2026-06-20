@@ -223,6 +223,40 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
         return "", ""
 
+    # Strategy F: Tails JSON API — fetch latest version from releases.json
+    elif strategy == "tails_api":
+        import json as _json
+
+        api_url = settings.get("api_url", "https://tails.net/install/v2/Tails/amd64/stable/latest.json")
+        file_type = settings.get("file_type", "img")  # "iso" or "img"
+
+        html = fetch_html(api_url)
+        if not html:
+            return "", ""
+
+        try:
+            data = _json.loads(html)
+            installations = data.get("installations", [])
+            if not installations:
+                return "", ""
+
+            latest = installations[0]
+            for installation in installations:
+                if installation.get("version", "") > latest.get("version", ""):
+                    latest = installation
+
+            for path in latest.get("installation-paths", []):
+                if path.get("type") == file_type:
+                    for target in path.get("target-files", []):
+                        url = target.get("url", "")
+                        if url:
+                            iso_filename = url.rsplit("/", 1)[-1]
+                            return iso_filename, url
+        except (_json.JSONDecodeError, KeyError, IndexError):
+            warn(f"{name} — could not parse Tails API response")
+
+        return "", ""
+
     return "", ""
 
 
@@ -343,8 +377,6 @@ def _cleanup_old_versions(new_iso: Path) -> None:
 
         for iso_path in all_isos:
             if iso_path == new_iso:
-                continue
-            if iso_path.suffix.lower() != ".iso":
                 continue
 
             try:

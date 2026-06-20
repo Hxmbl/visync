@@ -275,10 +275,12 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 
 
 def find_installed_isos(directory: Path) -> list[Path]:
-    """Find all ISO files under the given directory, ignoring macOS resource forks and .visync metadata."""
+    """Find all ISO/IMG files under the given directory, ignoring macOS resource forks and .visync metadata."""
     return [
-        p for p in directory.rglob("*.iso")
-        if not p.name.startswith("._") and ".visync" not in p.parts
+        p for p in directory.rglob("*")
+        if p.suffix.lower() in (".iso", ".img")
+        and not p.name.startswith("._")
+        and ".visync" not in p.parts
     ]
 
 

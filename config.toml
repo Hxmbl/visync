@@ -40,6 +40,7 @@ parrot = "Parrot Security"
 pop = "Pop!_OS"
 systemrescue = "SystemRescue"
 rescuezilla = "Rescuezilla"
+tails = "Tails"
 tiny11 = "Tiny11"
 
 # Specific desktop flavor/version overrides so regex doesn't grab them poorly
@@ -168,5 +169,14 @@ strategy = "popos_api"
 api_url = "https://api.pop-os.org/builds"
 variant = "generic"
 release = "24.04"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.Tails]
+clean_name = "Tails"
+keyword = "tails"
+strategy = "tails_api"
+api_url = "https://tails.net/install/v2/Tails/amd64/stable/latest.json"
+file_type = "img"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
