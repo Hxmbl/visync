@@ -152,7 +152,7 @@ class TestVerifyCommand(unittest.TestCase):
             result = self.runner.invoke(self.app, ["verify"])
 
             self.assertEqual(result.exit_code, 0)
-            self.assertIn("[✓]", result.stdout)
+            self.assertIn("✓", result.stdout)
             self.assertIn("1 verified", result.stdout)
 
     @patch("src.main.run_directory_verify")
@@ -168,7 +168,7 @@ class TestVerifyCommand(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 1)
         output = result.stdout + result.stderr
-        self.assertIn("[✗]", output)
+        self.assertIn("✗", output)
 
     @patch("src.main.find_ventoy_drives", return_value=[])
     @patch("src.main.load_config", return_value={})

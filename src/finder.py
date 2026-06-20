@@ -11,6 +11,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.output import console, warn
 
 def load_config(config_path: Path | None = None) -> dict:
     """Load configuration dictionary maps and distro settings from config.toml."""
@@ -30,7 +31,7 @@ def load_config(config_path: Path | None = None) -> dict:
         with open(config_path, "rb") as f:
             return tomllib.load(f)
     except Exception as e:
-        print(f"[-] Critical Error: Failed to parse config.toml database: {e}")
+        console.print(f"  [red]✗[/red] Failed to parse config.toml: {e}")
         return {}
 
 
@@ -178,10 +179,10 @@ def find_ventoy_drives() -> list[Path]:
         )
 
     if len(detected_paths) > 1:
-        print(
-            f"[!] Multiple Ventoy drives detected. Defaulting to: {detected_paths[0]}"
+        warn(
+            f"Multiple Ventoy drives detected. Defaulting to: {detected_paths[0]}"
         )
-        print(f"    Ignored: {[str(p) for p in detected_paths[1:]]}")
+        console.print(f"    [dim]Ignored: {[str(p) for p in detected_paths[1:]]}[/dim]")
 
     return detected_paths
 
@@ -294,7 +295,7 @@ def write_iso_metadata(
         with open(meta_file, "w") as f:
             json.dump(manifest, f, indent=2)
     except OSError as e:
-        print(f"[!] WARNING: Could not write metadata for {filename}: {e}")
+        console.print(f"  [yellow]⚠[/yellow] Could not write metadata for {filename}: {e}")
 
 
 def remove_iso_metadata(drive_root: Path, filename: str) -> None:
@@ -417,28 +418,28 @@ def visync_watchdog(drive_root: Path) -> None:
         if size <= VISYNC_SIZE_LIMIT:
             return
 
-        print(f"[!] Watchdog: .visync/ is {size / (1024**2):.1f} MiB (limit: 1 GiB). Running deep clean...")
+        console.print(f"  [yellow]⚠[/yellow] Watchdog: .visync/ is {size / (1024**2):.1f} MiB (limit: 1 GiB). Running deep clean...")
         _deep_clean_metadata(drive_root)
 
         size_after = _dir_size(visync_dir)
         if size_after <= VISYNC_SIZE_LIMIT:
-            print(f"[✓] Deep clean recovered space. .visync/ now {size_after / (1024**2):.1f} MiB.")
+            console.print(f"  [green]✓[/green] Deep clean recovered space. .visync/ now {size_after / (1024**2):.1f} MiB.")
             return
 
         # GUARDRAIL: Validate target before any recursive deletion
         _guard_visync_path(visync_dir)
 
-        print(f"[!] Watchdog: .visync/ still {size_after / (1024**2):.1f} MiB after deep clean. Wiping entirely.")
+        console.print(f"  [yellow]⚠[/yellow] Watchdog: .visync/ still {size_after / (1024**2):.1f} MiB after deep clean. Wiping entirely.")
         import shutil
         try:
             shutil.rmtree(visync_dir)
-            print(f"[✓] .visync/ wiped. Metadata will rebuild on next sync.")
+            console.print(f"  [green]✓[/green] .visync/ wiped. Metadata will rebuild on next sync.")
         except OSError as e:
-            print(f"[!] WARNING: Could not wipe .visync/: {e}")
+            console.print(f"  [yellow]⚠[/yellow] Could not wipe .visync/: {e}")
     except ValueError:
         raise
     except Exception as e:
-        print(f"[!] Watchdog error: {e}")
+        console.print(f"  [yellow]⚠[/yellow] Watchdog error: {e}")
 
 
 def _deep_clean_metadata(drive_root: Path) -> None:
@@ -467,10 +468,10 @@ def _deep_clean_metadata(drive_root: Path) -> None:
                     meta_file.unlink()
                     removed += 1
                 except OSError as e:
-                    print(f"[!] WARNING: Could not remove {meta_file.name}: {e}")
+                    console.print(f"  [yellow]⚠[/yellow] Could not remove {meta_file.name}: {e}")
         if removed:
-            print(f"    Removed {removed} orphaned metadata file(s).")
+            console.print(f"  [dim]Removed {removed} orphaned metadata file(s).[/dim]")
     except ValueError:
         raise
     except Exception as e:
-        print(f"[!] Deep clean error: {e}")
+        console.print(f"  [yellow]⚠[/yellow] Deep clean error: {e}")

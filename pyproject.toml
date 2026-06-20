@@ -9,6 +9,7 @@ description = "Ventoy ISO Synchronization Tool"
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12",
+    "rich>=13.0",
 ]
 
 [project.scripts]

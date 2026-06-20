@@ -15,6 +15,7 @@ from src.finder import (
     load_config,
     load_all_metadata,
 )
+from src.output import console, error, header, info, iso_table, success, warn
 from src.verify import extract_version_from_filename, run_directory_verify
 
 app = typer.Typer()
@@ -56,17 +57,17 @@ def list(
     else:
         drives = find_ventoy_drives()
         if not drives:
-            typer.echo("[-] No Ventoy drives detected.", err=True)
+            error("No Ventoy drives detected.")
             raise typer.Exit(1)
         iso_dir = drives[0]
 
     if not iso_dir.is_dir():
-        typer.echo(f"[-] Not a directory: {iso_dir}", err=True)
+        error(f"Not a directory: {iso_dir}")
         raise typer.Exit(1)
 
     iso_paths = find_installed_isos(iso_dir)
     if not iso_paths:
-        typer.echo("[-] No ISO files found.")
+        warn("No ISO files found.")
         return
 
     all_meta = load_all_metadata(iso_dir)
@@ -84,32 +85,10 @@ def list(
         size_gb = iso_path.stat().st_size / (1024**3)
         rows.append((distro, version, f"{size_gb:.1f}G", iso_path.name))
 
-    # Calculate column widths
-    col_distro = max(len(r[0]) for r in rows)
-    col_version = max(len(r[1]) for r in rows)
-    col_size = max(len(r[2]) for r in rows)
-
-    header = (
-        f"  {'Distro':<{col_distro}}  "
-        f"{'Version':<{col_version}}  "
-        f"{'Size':<{col_size}}  "
-        f"Filename"
-    )
-    typer.echo(f"\n  {header}")
-    typer.echo(f"  {'─' * col_distro}  {'─' * col_version}  {'─' * col_size}  {'─' * 40}")
-
-    for distro, version, size, filename in rows:
-        typer.echo(
-            f"  {distro:<{col_distro}}  "
-            f"{version:<{col_version}}  "
-            f"{size:<{col_size}}  "
-            f"{filename}"
-        )
-
     total_gb_val = sum(
         iso_path.stat().st_size / (1024**3) for iso_path in iso_paths
     )
-    typer.echo(f"\n  {len(rows)} ISO(s) — {total_gb_val:.1f} GiB total")
+    iso_table(rows, total_gb_val)
 
 
 @app.command()
@@ -131,37 +110,36 @@ def verify(
     else:
         drives = find_ventoy_drives()
         if not drives:
-            typer.echo("[-] No Ventoy drives detected.", err=True)
+            error("No Ventoy drives detected.")
             raise typer.Exit(1)
         iso_dir = drives[0]
 
     if not iso_dir.is_dir():
-        typer.echo(f"[-] Not a directory: {iso_dir}", err=True)
+        error(f"Not a directory: {iso_dir}")
         raise typer.Exit(1)
 
-    typer.echo(f"[*] Verifying ISOs in {iso_dir} ...")
+    info(f"Verifying ISOs in {iso_dir} ...")
     results = run_directory_verify(iso_dir, config_data)
 
     if not results:
-        typer.echo("[-] No ISO files found.")
+        warn("No ISO files found.")
         return
 
     verified = failed = skipped = 0
     for iso_path, distro, result in results:
         label = f"{iso_path.name} ({distro})"
         if result is True:
-            typer.echo(f"[✓] {label}")
+            success(label)
             verified += 1
         elif result is False:
-            typer.echo(f"[✗] {label} — checksum mismatch or fetch failed", err=True)
+            error(f"{label} — checksum mismatch or fetch failed")
             failed += 1
         else:
-            typer.echo(f"[-] {label} — no checksum config")
+            info(f"{label} — no checksum config")
             skipped += 1
 
-    typer.echo(
-        f"\n[*] Done: {verified} verified, {failed} failed, {skipped} skipped (no config)."
-    )
+    console.print()
+    info(f"Done: {verified} verified, {failed} failed, {skipped} skipped (no config).")
     if failed:
         raise typer.Exit(1)
 

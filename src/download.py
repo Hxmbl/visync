@@ -23,6 +23,17 @@ from src.finder import (
     remove_iso_metadata,
     visync_watchdog,
 )
+from src.output import (
+    console,
+    error,
+    header,
+    info,
+    make_download_progress,
+    removed,
+    section,
+    success,
+    warn,
+)
 from src.verify import compare_versions, extract_version_from_filename
 
 DEBUG = os.environ.get("VISYNC_DEBUG", "0") == "1"
@@ -70,26 +81,21 @@ def fetch_html(url: str, allow_insecure: bool = False) -> str:
             html = response.read().decode("utf-8", errors="ignore")
             # Detect bot-protected pages (e.g. Anubis proof-of-work)
             if "Anubis" in html[:1000]:
-                print("""
-[-] Mirror protected by bot challenge (Anubis). Cannot scrape automatically."
-Visit the URL in a browser, complete the challenge, then re-run."
-(NOTE: The challenge cannot be forwarded to a browser because"
-Anubis binds the challenge to this specific HTTP session.)")
-                """)
+                warn("Mirror protected by bot challenge (Anubis). Cannot scrape automatically.")
+                warn("Visit the URL in a browser, complete the challenge, then re-run.")
+                return ""
                 return ""
             return html
     except urllib.error.URLError as e:
         err_str = str(e).lower()
         if "ssl" in err_str or "certificate" in err_str or "cert" in err_str:
-            print(
-                f"[-] SSL certificate verification failed for {url}\n    Details: {e}"
-            )
-            print("    Skipping this mirror (non-interactive mode).")
+            error(f"SSL certificate verification failed for {url}")
+            info(f"Details: {e}")
             return ""
-        print(f"[-] Network link failure targeting mirror node {url}: {e}")
+        error(f"Network error: {url}: {e}")
         return ""
     except Exception as e:
-        print(f"[-] Network link failure targeting mirror node {url}: {e}")
+        error(f"Network error: {url}: {e}")
         return ""
 
 
@@ -101,7 +107,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
     # Pre-flight connectivity check — skip dead mirrors instantly
     if not ping_mirror(base_url):
-        print(f"[-] Mirror unreachable (ping failed): {base_url}")
+        warn(f"Mirror unreachable (ping failed): {base_url}")
         return "", ""
 
     # Strategy A: Direct Index File Tracking (e.g. Arch Linux)
@@ -162,11 +168,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> None:
     """Download an ISO file with streaming progress and optional metadata persistence."""
     _debug(f"Starting download: {url} -> {dest_path}")
-    print(f"[*] Extracting resource stream -> {dest_path.name}")
-    print(
-        "    Note: Progress shows 0% during connection setup. "
-        "This is normal, wait a bit."
-    )
+    console.print(f"  [cyan]↓[/cyan] Downloading [bold]{dest_path.name}[/bold]")
 
     # Verify sufficient disk space (need 105% of expected size)
     try:
@@ -177,26 +179,16 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> N
             expected = int(resp.headers.get("Content-Length", 0))
         if expected > 0:
             needed = int(expected * 1.05)
-            print(
-                f"    Expected size: {expected / (1024**3):.2f} GiB "
-                f"| Available: {available / (1024**3):.2f} GiB"
-            )
+            info(f"Expected: {expected / (1024**3):.2f} GiB | Available: {available / (1024**3):.2f} GiB")
             if available < needed:
-                print(
-                    f"[-] Insufficient disk space. "
-                    f"Need {needed / (1024**3):.2f} GiB, "
-                    f"have {available / (1024**3):.2f} GiB."
-                    "\nWe check for 105% of the expected size so we don't corrupt your drive.\nClean up some space and try again."
+                error(
+                    f"Insufficient disk space — need {needed / (1024**3):.2f} GiB, "
+                    f"have {available / (1024**3):.2f} GiB"
                 )
                 return
         else:
-            print(
-                f"    Available disk space: {available / (1024**3):.2f} GiB"
-            )
-            print(
-                "    [!] WARNING: Content-Length missing or unknown. "
-                "Proceeding with download; disk space cannot be verified."
-            )
+            info(f"Available disk space: {available / (1024**3):.2f} GiB")
+            warn("Content-Length unknown — disk space cannot be verified.")
     except Exception:
         pass
 
@@ -208,31 +200,31 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> N
         with urllib.request.urlopen(req, timeout=30) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
-            with open(part_path, "wb", buffering=1048576) as f:
-                while True:
-                    chunk = resp.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total > 0:
-                        percent = (downloaded / total) * 100
-                        sys.stdout.write(
-                            f"\r    -> {downloaded / (1024**2):.0f} / "
-                            f"{total / (1024**2):.0f} MiB ({percent:.1f}%)"
-                        )
-                        sys.stdout.flush()
+            with make_download_progress() as progress:
+                task = progress.add_task(
+                    "download",
+                    filename=dest_path.name,
+                    total=total or None,
+                )
+                with open(part_path, "wb", buffering=1048576) as f:
+                    while True:
+                        chunk = resp.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress.update(task, completed=downloaded)
     except OSError as e:
-        print(f"\n[-] Write/disk error during download: {e}")
+        error(f"Write/disk error during download: {e}")
         part_path.unlink(missing_ok=True)
         return
     except Exception as e:
-        print(f"\n[-] Network error during download: {e}")
+        error(f"Network error during download: {e}")
         part_path.unlink(missing_ok=True)
         return
 
     part_path.rename(dest_path)
-    print("\n[✓] Asset file write sequence complete.")
+    success(f"Downloaded {dest_path.name}")
 
     sha256_hex = ""
     if drive_root:
@@ -302,15 +294,11 @@ def _cleanup_old_versions(new_iso: Path) -> None:
                 old_stem = _variant_stem(old_vid)
 
                 if old_distro == new_distro and old_stem == new_stem:
-                    print(
-                        f"\x1b[33m[-] Removing deprecated image: {iso_path.name}\x1b[0m"
-                    )
+                    removed(f"Removing deprecated image: {iso_path.name}")
                     iso_path.unlink(missing_ok=True)
                     remove_iso_metadata(new_iso.parent, iso_path.name)
             except OSError:
-                print(
-                    f"[!] WARNING: Could not remove stale file: {iso_path.name}"
-                )
+                warn(f"Could not remove stale file: {iso_path.name}")
             except Exception:
                 pass
     except Exception:
@@ -362,28 +350,26 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
     """Scrape and version-check a single distro. Returns metadata for download decisions."""
     clean_name = settings.get("clean_name", entry_id)
     _debug(f"Checking {clean_name} (force={force})")
-    print(f"\n=== PROCESSING REPOSITORY SYNCHRONIZATION: {clean_name.upper()} ===")
+    section(clean_name.upper())
 
     latest_filename, download_url = process_scraping_strategy(clean_name, settings)
     if not latest_filename:
-        print(
-            f"[-] Unable to determine remote file properties for {clean_name}. Skipping section."
-        )
+        warn(f"Unable to determine remote file properties for {clean_name}. Skipping.")
         return entry_id, clean_name, "", False, None
 
-    print(f"[+] Current upstream variant reference target: {latest_filename}")
+    info(f"Latest: {latest_filename}")
 
     local_ventoy_files = find_installed_isos(ventoy_root)
 
     # Exact filename match — already up to date (skip check if --force)
     if not force and any(f.name == latest_filename for f in local_ventoy_files):
-        print(f"[✓] {clean_name} is fully initialized and matches upstream build.")
+        success(f"{clean_name} is up to date.")
         return entry_id, clean_name, latest_filename, True, None
 
     # Version-based comparison: find best local candidate and compare
     remote_version = extract_version_from_filename(latest_filename)
     if not remote_version:
-        print(f"[!] WARNING: Could not extract version from remote filename '{latest_filename}'. Skipping.")
+        warn(f"Could not extract version from '{latest_filename}'. Skipping.")
         return entry_id, clean_name, "", False, None
 
     if not force:
@@ -402,14 +388,14 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
 
             comparison = compare_versions(remote_version, local_version)
             if comparison <= 0:
-                print(
-                    f"[✓] {clean_name} local version ({local_version}) is current "
-                    f"(upstream: {remote_version}). Skipping download."
+                success(
+                    f"{clean_name} local version ({local_version}) is current "
+                    f"(upstream: {remote_version})"
                 )
                 return entry_id, clean_name, latest_filename, True, None
 
     if force:
-        print(f"[!] --force: Skipping version check for {clean_name}")
+        warn(f"--force: skipping version check for {clean_name}")
 
     return entry_id, clean_name, latest_filename, False, download_url
 
@@ -435,16 +421,14 @@ def sync_all_configured_distros(
     iso_settings = config.get("iso", {})
 
     if not distro_scrapers:
-        print(
-            "[-] Aborting: No distribution definitions configured inside [distros] block."
-        )
+        error("No distribution definitions configured inside [distros] block.")
         return
 
     use_buffer = "--no-buffer" not in sys.argv
 
     drives = find_ventoy_drives()
     if not drives:
-        print("[-] ERROR: No Ventoy drives found.")
+        error("No Ventoy drives found.")
         return
     ventoy_root = drives[0]
 
@@ -454,12 +438,10 @@ def sync_all_configured_distros(
     if use_buffer:
         download_target_dir = Path(config_download_dir) if config_download_dir else DEFAULT_STAGING_DIR
         download_target_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[*] Buffer Staging Enabled -> {download_target_dir}")
+        info(f"Buffer staging → {download_target_dir}")
     else:
         download_target_dir = ventoy_root
-        print(
-            f"[*] Direct Volume Mode Enabled -> Writing to mount path: {download_target_dir}"
-        )
+        info(f"Direct volume mode → {download_target_dir}")
 
     pending_downloads: list[tuple[str, str]] = []
     scrape_start = __import__("time").monotonic()
@@ -471,15 +453,15 @@ def sync_all_configured_distros(
         for future in concurrent.futures.as_completed(future_map, timeout=SCRAPE_DEADLINE):
             elapsed = __import__("time").monotonic() - scrape_start
             if elapsed > SCRAPE_DEADLINE:
-                print(f"[!] Watchdog: overall scrape deadline ({SCRAPE_DEADLINE}s) exceeded. Aborting scrape phase.")
+                warn(f"Scrape deadline ({SCRAPE_DEADLINE}s) exceeded. Aborting.")
                 break
             try:
                 entry_id, clean_name, latest_filename, up_to_date, download_url = future.result(timeout=PER_DISTRO_TIMEOUT)
             except concurrent.futures.TimeoutError:
-                print(f"[✗] Watchdog: {future_map[future]} scrape timed out ({PER_DISTRO_TIMEOUT}s limit). Skipping.")
+                error(f"{future_map[future]} scrape timed out ({PER_DISTRO_TIMEOUT}s). Skipping.")
                 continue
             except (TimeoutError, ConnectionResetError, OSError) as e:
-                print(f"[✗] Failed syncing {future_map[future]}: {e}")
+                error(f"Failed syncing {future_map[future]}: {e}")
                 continue
             if up_to_date or not download_url:
                 continue
@@ -488,12 +470,13 @@ def sync_all_configured_distros(
 
     if dry_run:
         if not pending_downloads:
-            print("[*] Dry run: nothing to download — all ISOs are current.")
+            info("Dry run: nothing to download — all ISOs are current.")
         else:
-            print(f"\n[*] Dry run: would download {len(pending_downloads)} file(s):")
+            console.print()
+            info(f"Dry run: would download {len(pending_downloads)} file(s):")
             for url, filename in pending_downloads:
-                print(f"    -> {filename}")
-                print(f"       {url}")
+                console.print(f"    [cyan]→[/cyan] {filename}")
+                console.print(f"      [dim]{url}[/dim]")
     else:
         for download_url, latest_filename in pending_downloads:
             dest = download_target_dir / latest_filename
@@ -501,30 +484,28 @@ def sync_all_configured_distros(
             try:
                 download_iso(download_url, dest, drive_root=ventoy_root)
             except (TimeoutError, ConnectionResetError, OSError) as e:
-                print(f"[✗] Failed syncing {latest_filename}: {e}")
+                error(f"Failed syncing {latest_filename}: {e}")
                 part_file.unlink(missing_ok=True)
                 continue
             if dest.parent != ventoy_root:
                 drive_dest = ventoy_root / latest_filename
                 try:
                     shutil.copy2(dest, drive_dest)
-                    print(f"[✓] Copied {latest_filename} to Ventoy drive")
+                    success(f"Copied {latest_filename} to Ventoy drive")
                     _cleanup_old_versions(drive_dest)
                 except OSError as e:
-                    print(f"[✗] Failed copying {latest_filename} to drive: {e}")
+                    error(f"Failed copying {latest_filename} to drive: {e}")
                     continue
 
     return download_target_dir
 
 
 if __name__ == "__main__":
-    print("====================================================")
-    print("     VISYNC PROTOCOL LOGISTICAL EXTENSION ENGINE    ")
-    print("====================================================")
+    header("VISYNC PROTOCOL LOGISTICAL EXTENSION ENGINE")
     try:
         sync_all_configured_distros()
     except KeyboardInterrupt:
-        print("\n\x1b[31m✕ Sync canceled by user. Cleaning up partial downloads...\x1b[0m")
+        console.print("\n[red]✕ Sync canceled by user. Cleaning up partial downloads...[/red]")
         _config = load_config()
         _iso_settings = _config.get("iso", {})
         _cleanup_targets: list[Path] = []
