@@ -72,13 +72,20 @@ def install(
             return
 
     output_info(f"Installing {clean_name}...")
-    # Sync just this one distro — direct to drive (no staging)
+    # Try staging first (faster, less drive wear), fall back to direct if staging too small
+    import shutil as _shutil
+    staging_dir = Path.home() / ".cache" / "visync" / "staging"
+    try:
+        usage = _shutil.disk_usage(staging_dir.parent)
+        use_buffer = usage.free > 512 * 1024 * 1024  # Need at least 512MB for staging
+    except Exception:
+        use_buffer = False
     sync_all_configured_distros(
         force=True,
         config_path=config,
         only=[entry_id],
         drive_override=ventoy_root,
-        use_buffer=False,
+        use_buffer=use_buffer,
     )
     # Only mark installed if the file is now on the drive
     existing = find_installed_isos(ventoy_root)
