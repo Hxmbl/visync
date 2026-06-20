@@ -51,7 +51,7 @@ MIRROR_CONNECT_TIMEOUT = 5
 MIRROR_HTTP_TIMEOUT = 10
 PER_DISTRO_TIMEOUT = 30
 SCRAPE_DEADLINE = 120
-DEFAULT_STAGING_DIR = Path("/tmp/visync_staging")
+DEFAULT_STAGING_DIR = Path.home() / ".cache" / "visync" / "staging"
 
 
 def ping_mirror(url: str) -> bool:
@@ -260,8 +260,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     return "", ""
 
 
-def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> None:
-    """Download an ISO file with streaming progress and optional metadata persistence."""
+def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> bool:
+    """Download an ISO file with streaming progress and optional metadata persistence.
+
+    Returns True on success, False on failure.
+    """
     _debug(f"Starting download: {url} -> {dest_path}")
     console.print(f"  [cyan]↓[/cyan] Downloading [bold]{dest_path.name}[/bold]")
 
@@ -280,7 +283,7 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> N
                     f"Insufficient disk space — need {needed / (1024**3):.2f} GiB, "
                     f"have {available / (1024**3):.2f} GiB"
                 )
-                return
+                return False
         else:
             info(f"Available disk space: {available / (1024**3):.2f} GiB")
             warn("Content-Length unknown — disk space cannot be verified.")
@@ -312,11 +315,11 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> N
     except OSError as e:
         error(f"Write/disk error during download: {e}")
         part_path.unlink(missing_ok=True)
-        return
+        return False
     except Exception as e:
         error(f"Network error during download: {e}")
         part_path.unlink(missing_ok=True)
-        return
+        return False
 
     part_path.rename(dest_path)
     success(f"Downloaded {dest_path.name}")
@@ -351,6 +354,8 @@ def download_iso(url: str, dest_path: Path, drive_root: Path | None = None) -> N
             sha256=sha256_hex,
         )
         _debug(f"Metadata written for {dest_path.name}")
+
+    return True
 
 
 def _cleanup_old_versions(new_iso: Path) -> None:
@@ -607,9 +612,12 @@ def sync_all_configured_distros(
             dest = download_target_dir / latest_filename
             part_file = dest.with_suffix(dest.suffix + ".part")
             try:
-                download_iso(download_url, dest, drive_root=ventoy_root)
+                ok = download_iso(download_url, dest, drive_root=ventoy_root)
             except (TimeoutError, ConnectionResetError, OSError) as e:
                 error(f"Failed syncing {latest_filename}: {e}")
+                part_file.unlink(missing_ok=True)
+                continue
+            if not ok:
                 part_file.unlink(missing_ok=True)
                 continue
             if dest.parent != ventoy_root:
