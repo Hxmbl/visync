@@ -655,6 +655,83 @@ class TestFindInstalledIsosFiltering(unittest.TestCase):
             _ok("Recursive scan finds nested ISOs, skips ._ files")
 
 
+class TestNixosChecksumParsing(unittest.TestCase):
+    """Verify NixOS channel page parser extracts SHA-256 into resolved_checksum."""
+
+    NIXOS_HTML = """<html><head><title>nixos-26.05 release nixos-26.05.1947.a0374025a863</title></head><body>
+<h1>nixos-26.05 release nixos-26.05.1947.a0374025a863</h1>
+<table><thead><tr><th>File name</th><th>Size</th><th>SHA-256 hash</th></tr></thead><tbody>
+<tr><td><a href='/nixos/26.05/nixos-26.05.1947.a0374025a863/nixos-minimal-26.05.1947.a0374025a863-x86_64-linux.iso'>nixos-minimal-26.05.1947.a0374025a863-x86_64-linux.iso</a></td><td align='right'>1672806400</td><td><tt>5490e6430a95064e7e58d3e731087ff70c7a57cbeae459dd5c56f0f7469991f2</tt></td></tr>
+<tr><td><a href='/nixos/26.05/nixos-26.05.1947.a0374025a863/nixos-graphical-26.05.1947.a0374025a863-x86_64-linux.iso'>nixos-graphical-26.05.1947.a0374025a863-x86_64-linux.iso</a></td><td align='right'>3800989696</td><td><tt>736a1615dd5aeccc351a4e4a9149129e30b6e0c4e2dc68ffe8567754f96d85c5</tt></td></tr>
+</tbody></table></body></html>"""
+
+    def test_nixos_channel_resolves_checksum(self) -> None:
+        """The nixos_channel strategy should populate settings['resolved_checksum']."""
+        _section("NixOS checksum: channel page parsing")
+        settings = {
+            "clean_name": "NixOS Minimal",
+            "strategy": "nixos_channel",
+            "base_url": "https://channels.nixos.org/nixos-26.05",
+            "variant": "minimal",
+        }
+        # Mock fetch_html to return our canned HTML
+        with patch("src.download.fetch_html", return_value=self.NIXOS_HTML):
+            with patch("src.download.urllib.request.urlopen") as mock_urlopen:
+                mock_resp = MagicMock()
+                mock_resp.status = 200
+                mock_resp.__enter__ = lambda s: s
+                mock_resp.__exit__ = MagicMock(return_value=False)
+                mock_urlopen.return_value = mock_resp
+                filename, url = process_scraping_strategy("NixOS Minimal", settings)
+
+        self.assertEqual(filename, "nixos-minimal-26.05.1947.a0374025a863-x86_64-linux.iso")
+        self.assertIn("releases.nixos.org", url)
+        self.assertEqual(
+            settings["resolved_checksum"],
+            "5490e6430a95064e7e58d3e731087ff70c7a57cbeae459dd5c56f0f7469991f2",
+        )
+        _ok("resolved_checksum set from channel page HTML")
+
+    def test_nixos_graphical_checksum(self) -> None:
+        """Graphical variant should get its own checksum."""
+        settings = {
+            "clean_name": "NixOS Graphical",
+            "strategy": "nixos_channel",
+            "base_url": "https://channels.nixos.org/nixos-26.05",
+            "variant": "graphical",
+        }
+        with patch("src.download.fetch_html", return_value=self.NIXOS_HTML):
+            with patch("src.download.urllib.request.urlopen") as mock_urlopen:
+                mock_resp = MagicMock()
+                mock_resp.status = 200
+                mock_resp.__enter__ = lambda s: s
+                mock_resp.__exit__ = MagicMock(return_value=False)
+                mock_urlopen.return_value = mock_resp
+                filename, url = process_scraping_strategy("NixOS Graphical", settings)
+
+        self.assertIn("nixos-graphical", filename)
+        self.assertEqual(
+            settings["resolved_checksum"],
+            "736a1615dd5aeccc351a4e4a9149129e30b6e0c4e2dc68ffe8567754f96d85c5",
+        )
+        _ok("Graphical variant checksum parsed correctly")
+
+    def test_missing_checksum_does_not_set_key(self) -> None:
+        """If filename not in HTML, resolved_checksum should not be set."""
+        settings = {
+            "clean_name": "NixOS Minimal",
+            "strategy": "nixos_channel",
+            "base_url": "https://channels.nixos.org/nixos-26.05",
+            "variant": "minimal",
+        }
+        with patch("src.download.fetch_html", return_value="<html></html>"):
+            filename, url = process_scraping_strategy("NixOS Minimal", settings)
+
+        self.assertEqual(filename, "")
+        self.assertNotIn("resolved_checksum", settings)
+        _ok("Missing checksum leaves settings clean")
+
+
 if __name__ == "__main__":
     print()
     print(f"  {'#' * 62}")

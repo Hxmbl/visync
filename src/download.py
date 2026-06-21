@@ -189,6 +189,17 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         iso_filename = f"nixos-{variant}-{version_id}-x86_64-linux.iso"
         iso_url = f"https://releases.nixos.org/nixos/{short_version}/{full_version}/{iso_filename}"
 
+        # Parse SHA-256 checksum from the channel page HTML table.
+        # The page has rows: <td><a href='...'>FILENAME</a></td><td>SIZE</td><td><tt>HASH</tt></td>
+        checksum_match = re.search(
+            r"href=['\"][^'\"]*" + re.escape(iso_filename) + r"['\"]>"
+            + re.escape(iso_filename)
+            + r"</a></td><td[^>]*>\d+</td><td><tt>([a-f0-9]{64})</tt>",
+            html,
+        )
+        if checksum_match:
+            settings["resolved_checksum"] = checksum_match.group(1)
+
         # Verify the URL is reachable
         try:
             req = urllib.request.Request(iso_url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
@@ -267,6 +278,7 @@ def download_iso(
     drive_root: Path | None = None,
     distro_config: dict | None = None,
     checksums_config: dict | None = None,
+    no_verify: bool = False,
 ) -> bool:
     """Download an ISO file with streaming progress and optional metadata persistence.
 
@@ -352,7 +364,7 @@ def download_iso(
     success(f"Downloaded {dest_path.name}")
 
     # Auto-verify checksum if config is available
-    if distro_config and checksums_config is not None:
+    if not no_verify and distro_config and checksums_config is not None:
         from src.verify import verify_from_config
         result = verify_from_config(dest_path, "", distro_config, checksums_config)
         if result is False:
@@ -600,6 +612,7 @@ def sync_all_configured_distros(
     only: list[str] | None = None,
     drive_override: Path | None = None,
     use_buffer: bool | None = None,
+    no_verify: bool = False,
 ):
     """Iterate through user-defined scrapers to pull updates down safely.
 
@@ -694,6 +707,7 @@ def sync_all_configured_distros(
                     drive_root=ventoy_root,
                     distro_config=distro_cfg,
                     checksums_config=checksums_config,
+                    no_verify=no_verify,
                 )
             except (TimeoutError, ConnectionResetError, OSError) as e:
                 error(f"Failed syncing {latest_filename}: {e}")

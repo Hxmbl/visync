@@ -586,6 +586,11 @@ class TestShortFlags(unittest.TestCase):
             self.assertIn("--force", opts)
             self.assertIn("-f", opts, f"{cmd} missing -f for --force")
 
+    def test_no_verify_on_install_sync_update(self) -> None:
+        for cmd in ["install", "sync", "update"]:
+            opts = self._get_options(cmd)
+            self.assertIn("--no-verify", opts, f"{cmd} missing --no-verify")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

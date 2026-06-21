@@ -47,6 +47,9 @@ def install(
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be installed without downloading"
     ),
+    no_verify: bool = typer.Option(
+        False, "--no-verify", help="Skip checksum verification after download"
+    ),
 ) -> None:
     """Download and install distros to the Ventoy drive.
 
@@ -138,6 +141,7 @@ def install(
         only=to_download,
         drive_override=ventoy_root,
         use_buffer=use_buffer,
+        no_verify=no_verify,
     )
 
     # Mark installed if file is now on drive
@@ -235,6 +239,9 @@ def update(
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be updated without downloading"
     ),
+    no_verify: bool = typer.Option(
+        False, "--no-verify", help="Skip checksum verification after download"
+    ),
 ) -> None:
     """Update installed distros to latest versions."""
     from src.download import sync_all_configured_distros
@@ -262,6 +269,7 @@ def update(
         config_path=config,
         only=only,
         drive_override=ventoy_root,
+        no_verify=no_verify,
     )
 
 
@@ -515,6 +523,9 @@ def sync(
     all: bool = typer.Option(
         False, "--all", "-a", help="Sync all configured distros (not just installed)"
     ),
+    no_verify: bool = typer.Option(
+        False, "--no-verify", help="Skip checksum verification after download"
+    ),
 ) -> None:
     """Sync installed distros to the Ventoy drive."""
     from src.download import sync_all_configured_distros
@@ -537,6 +548,7 @@ def sync(
         config_path=config,
         only=only,
         drive_override=drive_root,
+        no_verify=no_verify,
     )
 
 

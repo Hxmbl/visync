@@ -349,6 +349,14 @@ def verify_from_config(
     if not checksums_config.get("enabled", True):
         return None
 
+    # Fast path: if the scraper already resolved a checksum (e.g. NixOS channel
+    # page embeds hashes inline), compare directly without fetching a URL.
+    resolved = distro_config.get("resolved_checksum")
+    if resolved:
+        algo = distro_config.get("checksum_algo", "sha256")
+        local = compute_iso_hash(iso_path, algo)
+        return local == resolved
+
     checksum_url = distro_config.get("checksum_url")
     if not checksum_url:
         return None
