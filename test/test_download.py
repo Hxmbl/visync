@@ -732,6 +732,69 @@ class TestNixosChecksumParsing(unittest.TestCase):
         _ok("Missing checksum leaves settings clean")
 
 
+class TestChunkedDownload(unittest.TestCase):
+    """Verify chunked parallel download path."""
+
+    def test_chunked_download_writes_correct_data(self) -> None:
+        """_download_chunked should write all bytes at correct offsets."""
+        _section("Chunked download: parallel range writes")
+        from src.download import _download_chunked
+
+        # 1 MiB of known data
+        data = os.urandom(1024 * 1024)
+        total = len(data)
+
+        # Serve it via a simple HTTP handler that supports Range
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        import threading
+
+        class RangeHandler(BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(total))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+
+            def do_GET(self):
+                range_header = self.headers.get("Range", "")
+                if range_header.startswith("bytes="):
+                    spec = range_header[6:]
+                    start_s, end_s = spec.split("-")
+                    start, end = int(start_s), int(end_s) + 1
+                else:
+                    start, end = 0, total
+                chunk = data[start:end]
+                self.send_response(206 if range_header else 200)
+                self.send_header("Content-Length", str(len(chunk)))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                self.wfile.write(chunk)
+
+            def log_message(self, *a):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), RangeHandler)
+        port = server.server_address[1]
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            part = Path(tmpdir) / "test.iso.part"
+            ok = _download_chunked(
+                f"http://127.0.0.1:{port}/test.iso",
+                part,
+                total,
+                4,
+                "test.iso",
+            )
+            server.shutdown()
+
+            self.assertTrue(ok)
+            self.assertEqual(part.stat().st_size, total)
+            self.assertEqual(part.read_bytes(), data)
+            _ok("Chunked download wrote correct data at correct offsets")
+
+
 if __name__ == "__main__":
     print()
     print(f"  {'#' * 62}")

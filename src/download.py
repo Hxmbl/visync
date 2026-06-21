@@ -7,6 +7,7 @@ import re
 import shutil
 import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -272,56 +273,121 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     return "", ""
 
 
-def download_iso(
-    url: str,
-    dest_path: Path,
-    drive_root: Path | None = None,
-    distro_config: dict | None = None,
-    checksums_config: dict | None = None,
-    no_verify: bool = False,
-) -> bool:
-    """Download an ISO file with streaming progress and optional metadata persistence.
+DOWNLOAD_THREADS = int(os.environ.get("VISYNC_DOWNLOAD_THREADS", "4"))
+MIN_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB minimum per chunk
 
+
+def _download_chunked(
+    url: str,
+    part_path: Path,
+    total: int,
+    num_threads: int,
+    filename: str,
+) -> bool:
+    """Download a file using HTTP Range requests in parallel threads.
+
+    Writes directly to part_path at the correct offsets using os.pwrite.
     Returns True on success, False on failure.
     """
-    _debug(f"Starting download: {url} -> {dest_path}")
-    console.print(f"  [cyan]↓[/cyan] Downloading [bold]{dest_path.name}[/bold]")
+    import threading
 
-    # Verify sufficient disk space (need 105% of expected size)
+    chunk_size = max(MIN_CHUNK_SIZE, total // num_threads)
+    # Build (start, end) ranges
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    while start < total:
+        end = min(start + chunk_size - 1, total - 1)
+        ranges.append((start, end))
+        start = end + 1
+
+    actual_threads = len(ranges)
+    _debug(f"Chunked download: {total} bytes in {actual_threads} chunks of ~{chunk_size} bytes")
+
+    # Pre-allocate the file
+    fd = os.open(str(part_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
     try:
-        usage = shutil.disk_usage(dest_path.parent)
-        available = usage.free
-        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            expected = int(resp.headers.get("Content-Length", 0))
-        if expected > 0:
-            needed = int(expected * 1.05)
-            info(f"Expected: {expected / (1024**3):.2f} GiB | Available: {available / (1024**3):.2f} GiB")
-            if available < needed:
-                error(
-                    f"Insufficient disk space — need {needed / (1024**3):.2f} GiB, "
-                    f"have {available / (1024**3):.2f} GiB"
-                )
-                return False
-        else:
-            info(f"Available disk space: {available / (1024**3):.2f} GiB")
-            warn("Content-Length unknown — disk space cannot be verified.")
-    except Exception:
-        pass
+        os.ftruncate(fd, total)
+    except OSError:
+        os.close(fd)
+        return False
 
+    downloaded = [0] * actual_threads
+    lock = threading.Lock()
+    errors: list[str] = []
+
+    def _download_chunk(idx: int, chunk_start: int, chunk_end: int) -> None:
+        nonlocal downloaded
+        range_header = f"bytes={chunk_start}-{chunk_end}"
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0", "Range": range_header},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                offset = chunk_start
+                while True:
+                    try:
+                        data = resp.read(128000)
+                    except socket.timeout:
+                        with lock:
+                            errors.append(f"Chunk {idx} stalled")
+                        return
+                    if not data:
+                        break
+                    os.pwrite(fd, data, offset)
+                    offset += len(data)
+                    with lock:
+                        downloaded[idx] = offset - chunk_start
+        except Exception as e:
+            with lock:
+                errors.append(f"Chunk {idx}: {e}")
+
+    with make_download_progress() as progress:
+        task = progress.add_task("download", filename=filename, total=total or None)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=actual_threads) as pool:
+            futures = [
+                pool.submit(_download_chunk, i, s, e)
+                for i, (s, e) in enumerate(ranges)
+            ]
+            # Poll progress while futures run
+            while not all(f.done() for f in futures):
+                time.sleep(0.25)
+                with lock:
+                    total_done = sum(downloaded)
+                progress.update(task, completed=total_done)
+            # Final update
+            concurrent.futures.wait(futures)
+            with lock:
+                total_done = sum(downloaded)
+            progress.update(task, completed=total_done)
+
+    os.close(fd)
+
+    if errors:
+        error(f"Chunked download failed: {'; '.join(errors[:3])}")
+        return False
+
+    return True
+
+
+def _download_single_stream(
+    url: str,
+    part_path: Path,
+    total: int,
+    filename: str,
+) -> bool:
+    """Download a file in a single stream with progress reporting."""
     CHUNK_SIZE = 128000
-    READ_TIMEOUT = 30  # seconds per chunk before considering stalled
-    part_path = dest_path.with_suffix(dest_path.suffix + ".part")
+    READ_TIMEOUT = 30
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
-            total = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
             with make_download_progress() as progress:
                 task = progress.add_task(
                     "download",
-                    filename=dest_path.name,
+                    filename=filename,
                     total=total or None,
                 )
                 with open(part_path, "wb", buffering=1048576) as f:
@@ -346,16 +412,83 @@ def download_iso(
         part_path.unlink(missing_ok=True)
         return False
 
+    return True
+
+
+def download_iso(
+    url: str,
+    dest_path: Path,
+    drive_root: Path | None = None,
+    distro_config: dict | None = None,
+    checksums_config: dict | None = None,
+    no_verify: bool = False,
+) -> bool:
+    """Download an ISO file with streaming progress and optional metadata persistence.
+
+    Returns True on success, False on failure.
+    """
+    _debug(f"Starting download: {url} -> {dest_path}")
+    console.print(f"  [cyan]↓[/cyan] Downloading [bold]{dest_path.name}[/bold]")
+
+    # HEAD request: get size, check range support
+    expected = 0
+    ranges_supported = False
+    try:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            expected = int(resp.headers.get("Content-Length", 0))
+            accept_ranges = resp.headers.get("Accept-Ranges", "")
+            ranges_supported = accept_ranges == "bytes"
+    except Exception:
+        pass
+
+    # Disk space check
+    try:
+        usage = shutil.disk_usage(dest_path.parent)
+        available = usage.free
+        if expected > 0:
+            needed = int(expected * 1.05)
+            info(f"Expected: {expected / (1024**3):.2f} GiB | Available: {available / (1024**3):.2f} GiB")
+            if available < needed:
+                error(
+                    f"Insufficient disk space — need {needed / (1024**3):.2f} GiB, "
+                    f"have {available / (1024**3):.2f} GiB"
+                )
+                return False
+        else:
+            info(f"Available disk space: {available / (1024**3):.2f} GiB")
+            warn("Content-Length unknown — disk space cannot be verified.")
+    except Exception:
+        pass
+
+    part_path = dest_path.with_suffix(dest_path.suffix + ".part")
+
+    # Choose chunked or single-stream
+    if ranges_supported and expected > MIN_CHUNK_SIZE * DOWNLOAD_THREADS:
+        _debug(f"Using chunked download ({DOWNLOAD_THREADS} threads)")
+        ok = _download_chunked(url, part_path, expected, DOWNLOAD_THREADS, dest_path.name)
+        if not ok:
+            part_path.unlink(missing_ok=True)
+            return False
+    else:
+        if not ranges_supported:
+            _debug("Server does not support Range requests — using single stream")
+        else:
+            _debug("File too small for chunked download — using single stream")
+        ok = _download_single_stream(url, part_path, expected, dest_path.name)
+        if not ok:
+            return False
+
     # Verify file is not empty or obviously truncated
     if part_path.stat().st_size == 0:
         error(f"Download produced empty file: {dest_path.name}")
         part_path.unlink(missing_ok=True)
         return False
 
-    if total > 0 and part_path.stat().st_size < total:
+    if expected > 0 and part_path.stat().st_size < expected:
         error(
             f"Download truncated — got {part_path.stat().st_size / (1024**3):.2f} GiB "
-            f"of expected {total / (1024**3):.2f} GiB"
+            f"of expected {expected / (1024**3):.2f} GiB"
         )
         part_path.unlink(missing_ok=True)
         return False
