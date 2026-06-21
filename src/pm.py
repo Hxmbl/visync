@@ -86,10 +86,11 @@ def resolve_distro(query: str, config: dict) -> str | None:
         if settings.get("clean_name", "").lower() == query_lower:
             return entry_id
 
-    # Partial match on clean_name or entry_id
+    # Partial match on clean_name, entry_id, or keyword
     for entry_id, settings in distros.items():
         clean = settings.get("clean_name", "").lower()
-        if query_lower in clean or query_lower in entry_id.lower():
+        keyword = settings.get("keyword", "").lower()
+        if query_lower in clean or query_lower in entry_id.lower() or query_lower == keyword:
             return entry_id
 
     return None
