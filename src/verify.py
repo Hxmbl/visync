@@ -341,10 +341,12 @@ def verify_from_config(
     distro_name: str,
     distro_config: dict,
     checksums_config: dict,
+    precomputed_hash: str = "",
 ) -> Optional[bool]:
     """Verify a single ISO using its distro's checksum configuration.
 
     Returns True/False on success, None if no checksum config is available.
+    If *precomputed_hash* is provided, skip re-hashing the file.
     """
     if not checksums_config.get("enabled", True):
         return None
@@ -354,7 +356,7 @@ def verify_from_config(
     resolved = distro_config.get("resolved_checksum")
     if resolved:
         algo = distro_config.get("checksum_algo", "sha256")
-        local = compute_iso_hash(iso_path, algo)
+        local = precomputed_hash or compute_iso_hash(iso_path, algo)
         return local == resolved
 
     checksum_url = distro_config.get("checksum_url")

@@ -496,10 +496,27 @@ def download_iso(
     part_path.rename(dest_path)
     success(f"Downloaded {dest_path.name}")
 
+    # Compute SHA-256 once — used for both verification and metadata
+    sha256_hex = ""
+    try:
+        h = hashlib.sha256()
+        with open(dest_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+        sha256_hex = h.hexdigest()
+    except OSError:
+        pass
+
     # Auto-verify checksum if config is available
     if not no_verify and distro_config and checksums_config is not None:
         from src.verify import verify_from_config
-        result = verify_from_config(dest_path, "", distro_config, checksums_config)
+        result = verify_from_config(
+            dest_path, "", distro_config, checksums_config,
+            precomputed_hash=sha256_hex,
+        )
         if result is False:
             error(f"Checksum verification failed for {dest_path.name} — deleting")
             dest_path.unlink(missing_ok=True)
@@ -508,20 +525,6 @@ def download_iso(
             success(f"Checksum verified: {dest_path.name}")
         else:
             warn(f"No checksum config for {dest_path.name} — skipping verification")
-
-    sha256_hex = ""
-    if drive_root:
-        try:
-            h = hashlib.sha256()
-            with open(dest_path, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    h.update(chunk)
-            sha256_hex = h.hexdigest()
-        except OSError:
-            pass
 
     _cleanup_old_versions(dest_path)
 
